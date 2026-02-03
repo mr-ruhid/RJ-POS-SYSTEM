@@ -52,6 +52,7 @@ Route::get('/products/print/barcodes', [ProductController::class, 'barcodes'])->
 // Mağaza Endirimləri
 Route::get('/products/discounts', [ProductDiscountController::class, 'index'])->name('products.discounts');
 Route::post('/products/discounts', [ProductDiscountController::class, 'store'])->name('discounts.store');
+Route::get('/pos/check-promo', [App\Http\Controllers\PosController::class, 'checkPromo'])->name('pos.check_promo');
 Route::post('/products/discounts/{discount}/stop', [ProductDiscountController::class, 'stop'])->name('discounts.stop');
 
 // Kritik Limit Yeniləmə

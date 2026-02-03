@@ -7,7 +7,7 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\ProductBatch;
 use App\Models\User;
-use App\Models\Promocode; // Promokod modelini əlavə etdik
+use App\Models\Promocode;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
@@ -60,7 +60,7 @@ class PosController extends Controller
             $price = (float) $product->selling_price;
             $discountAmount = 0;
 
-            // Vergi dərəcəsi (Batch kodundan)
+            // Vergi dərəcəsi
             $taxRate = 0;
             $firstBatch = $product->batches->first();
             if ($firstBatch && $firstBatch->batch_code) {
@@ -97,14 +97,59 @@ class PosController extends Controller
         return response()->json($results);
     }
 
-    // 3. Satışı Tamamla
+    // [YENİ] 3. Promokod Yoxlanışı (AJAX)
+    public function checkPromo(Request $request)
+    {
+        $code = $request->get('code');
+        // Cari səbət cəmini alırıq (endirim hesablamaq üçün)
+        $currentTotal = (float) $request->get('total');
+
+        if (!$code) return response()->json(['valid' => false, 'message' => 'Kod daxil edilməyib']);
+
+        $promo = Promocode::where('code', $code)->first();
+
+        if (!$promo) {
+            return response()->json(['valid' => false, 'message' => 'Promokod tapılmadı']);
+        }
+
+        if (!$promo->is_active) {
+            return response()->json(['valid' => false, 'message' => 'Bu promokod aktiv deyil']);
+        }
+
+        if ($promo->expires_at && Carbon::parse($promo->expires_at)->isPast()) {
+            return response()->json(['valid' => false, 'message' => 'Promokodun vaxtı bitib']);
+        }
+
+        if ($promo->usage_limit && $promo->orders_count >= $promo->usage_limit) {
+            return response()->json(['valid' => false, 'message' => 'Promokod limiti dolub']);
+        }
+
+        // Endirim məbləğini hesablayırıq
+        $discountAmount = 0;
+        if ($promo->discount_type == 'percent') {
+            $discountAmount = ($currentTotal * $promo->discount_value) / 100;
+        } else {
+            $discountAmount = $promo->discount_value;
+        }
+
+        // Endirim ümumi məbləğdən çox ola bilməz
+        $discountAmount = min($discountAmount, $currentTotal);
+
+        return response()->json([
+            'valid' => true,
+            'discount_amount' => $discountAmount,
+            'message' => 'Promokod tətbiq edildi! (-' . number_format($discountAmount, 2) . ' AZN)'
+        ]);
+    }
+
+    // 4. Satışı Tamamla
     public function store(Request $request)
     {
         $request->validate([
             'cart' => 'required|array|min:1',
             'payment_method' => 'required|in:cash,card,bonus',
             'paid_amount' => 'required|numeric|min:0',
-            'promo_code' => 'nullable|string' // Promokod validasiyası
+            'promo_code' => 'nullable|string'
         ]);
 
         try {
@@ -116,23 +161,12 @@ class PosController extends Controller
             $totalProductDiscount = 0;
             $grandTotal = 0;
 
-            // User Təyini
-            $userId = Auth::id();
-            if (!$userId) {
-                $firstUser = User::first();
-                $userId = $firstUser ? $firstUser->id : User::create([
-                    'name' => 'Admin',
-                    'email' => 'admin@system.local',
-                    'password' => Hash::make('admin123')
-                ])->id;
-            }
+            $userId = Auth::id() ?? 1;
 
-            // Lotereya Kodu
             $lotteryCode = method_exists(Order::class, 'generateUniqueLotteryCode')
                             ? Order::generateUniqueLotteryCode()
                             : (string) rand(1000, 9999);
 
-            // İlkin Order yaradılır (boş dəyərlərlə)
             $order = Order::create([
                 'user_id' => $userId,
                 'receipt_code' => strtoupper(Str::random(8)),
@@ -147,16 +181,16 @@ class PosController extends Controller
                 'status' => 'completed'
             ]);
 
-            // Məhsulları emal edirik
             foreach ($request->cart as $item) {
-                $product = Product::lockForUpdate()->findOrFail($item['id']);
+                // [DÜZƏLİŞ] 'with(activeDiscount)' əlavə etdik ki, endirim görünsün
+                $product = Product::with('activeDiscount')->lockForUpdate()->findOrFail($item['id']);
+
                 $qtyNeeded = $item['qty'];
                 $isGiftRaw = $item['is_gift'] ?? false;
                 $isGift = filter_var($isGiftRaw, FILTER_VALIDATE_BOOLEAN);
 
                 $originalPrice = (float) $product->selling_price;
 
-                // Stokdan çıxılma
                 $deductionResult = $this->deductFromStoreStock($product, $qtyNeeded);
                 $productTotalCost = $deductionResult['total_cost'];
                 $calculatedTotalTax = $deductionResult['total_tax'];
@@ -166,13 +200,12 @@ class PosController extends Controller
                 $lineTotal = 0;
 
                 if ($isGift) {
-                    // Hədiyyə
                     $price = 0;
                     $lineTotal = 0;
                     $itemTaxAmount = $calculatedTotalTax;
                     $itemCostForReport = $productTotalCost + $calculatedTotalTax;
                 } else {
-                    // Normal Satış - MƏHSUL ENDİRİMİ
+                    // Məhsul Endiriminin Hesablanması (Backend tərəfdə təkrar yoxlayırıq)
                     if ($product->activeDiscount) {
                         $d = $product->activeDiscount;
                         $discountAmount = ($d->type == 'fixed') ? $d->value : ($price * $d->value / 100);
@@ -181,12 +214,10 @@ class PosController extends Controller
                     $finalUnitTestPrice = max(0, $price - $discountAmount);
                     $lineTotal = $finalUnitTestPrice * $qtyNeeded;
 
-                    // Vergi və Xərc
                     $itemTaxAmount = $calculatedTotalTax;
                     $itemCostForReport = $productTotalCost;
                 }
 
-                // OrderItem yaradılır
                 OrderItem::create([
                     'order_id' => $order->id,
                     'product_id' => $product->id,
@@ -201,11 +232,10 @@ class PosController extends Controller
                     'total' => $lineTotal
                 ]);
 
-                // Ümumi dəyərləri toplayırıq
                 $subtotal += ($originalPrice * $qtyNeeded);
                 $totalProductDiscount += ($discountAmount * $qtyNeeded);
                 $totalTax += $itemTaxAmount;
-                $grandTotal += $lineTotal; // Məhsul endirimləri artıq buradadır
+                $grandTotal += $lineTotal;
                 $totalCost += $itemCostForReport;
             }
 
@@ -217,7 +247,6 @@ class PosController extends Controller
             if ($request->promo_code) {
                 $promo = Promocode::where('code', $request->promo_code)->first();
 
-                // Promokod yoxlanışı (Aktivmi? Vaxtı bitibmi? Limiti dolubmu?)
                 if ($promo && $promo->is_active) {
                     $isValidDate = (!$promo->expires_at || $promo->expires_at > now());
                     $isValidLimit = (!$promo->usage_limit || $promo->orders_count < $promo->usage_limit);
@@ -226,29 +255,21 @@ class PosController extends Controller
                         $promoId = $promo->id;
                         $promoCodeStr = $promo->code;
 
-                        // Endirim hesablanması
                         if ($promo->discount_type == 'percent') {
                             $promoDiscount = $grandTotal * ($promo->discount_value / 100);
                         } else {
                             $promoDiscount = $promo->discount_value;
                         }
 
-                        // Promokod məbləği Yekun Məbləğdən çox ola bilməz
                         $promoDiscount = min($promoDiscount, $grandTotal);
-
-                        // İstifadə sayını artırırıq
                         $promo->increment('orders_count');
                     }
                 }
             }
 
-            // Yekun Məbləğdən Promokodu çıxırıq
             $grandTotal -= $promoDiscount;
-
-            // Cəmi endirim = Məhsul endirimləri + Promokod endirimi
             $totalDiscountAll = $totalProductDiscount + $promoDiscount;
 
-            // Order-i yeniləyirik
             $order->update([
                 'subtotal' => $subtotal,
                 'total_discount' => $totalDiscountAll,
@@ -281,7 +302,6 @@ class PosController extends Controller
         }
     }
 
-    // Stokdan silmə funksiyası (Dəyişməyib, olduğu kimi qalır)
     private function deductFromStoreStock($product, $qtyNeeded)
     {
         $batches = ProductBatch::where('product_id', $product->id)

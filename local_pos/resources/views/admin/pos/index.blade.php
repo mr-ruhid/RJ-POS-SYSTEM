@@ -10,15 +10,14 @@
         isProcessing: false,
         showCheckoutModal: false,
         promoCode: '',
+        promoDiscountAmount: 0, // Promokod endirimi üçün dəyişən
 
-        // Səhifə yüklənəndə axtarışa fokuslan
         init() {
             this.$nextTick(() => {
                 if(this.$refs.searchInput) this.$refs.searchInput.focus();
             });
         },
 
-        // Məhsul Axtarışı
         async searchProducts() {
             if(this.searchQuery.length > 0 && this.searchQuery.length < 2) return;
 
@@ -28,7 +27,6 @@
                 const data = await response.json();
                 this.products = data;
 
-                // Əgər 1 məhsul tapılıbsa və barkod tam uyğundursa, birbaşa səbətə at
                 if (this.products.length === 1 && this.products[0].barcode === this.searchQuery) {
                     this.addToCart(this.products[0]);
                     this.searchQuery = '';
@@ -41,13 +39,11 @@
             }
         },
 
-        // Səbətə At
         addToCart(product) {
             if (product.stock <= 0) {
                 alert('Bu məhsul bitib!');
                 return;
             }
-            // Hədiyyə olmayan eyni məhsulu axtarırıq
             const existingItem = this.cart.find(item => item.id === product.id && !item.is_gift);
 
             if (existingItem) {
@@ -60,12 +56,13 @@
                 this.cart.push({
                     ...product,
                     qty: 1,
-                    is_gift: false // Default: Hədiyyə deyil
+                    is_gift: false
                 });
             }
+            // Məhsul əlavə olunanda promokodu sıfırlayırıq ki, yenidən yoxlansın (məbləğ dəyişib)
+            this.promoDiscountAmount = 0;
         },
 
-        // Sayı Dəyiş
         updateQty(index, amount) {
             const item = this.cart[index];
             const newQty = item.qty + amount;
@@ -80,46 +77,88 @@
             } else {
                 this.removeFromCart(index);
             }
+            this.promoDiscountAmount = 0; // Məbləğ dəyişdiyi üçün reset
         },
 
-        // Sil
         removeFromCart(index) {
             this.cart.splice(index, 1);
+            this.promoDiscountAmount = 0;
         },
 
-        // Hədiyyə Rejimini Dəyiş
         toggleGift(index) {
             this.cart[index].is_gift = !this.cart[index].is_gift;
+            this.promoDiscountAmount = 0;
         },
 
-        // Cəm Hesablamalar
+        // Promokodu Yoxlamaq (API Sorğusu)
+        async applyPromo() {
+            if(!this.promoCode) return;
+
+            // Hazırki məbləğ (Məhsul endirimləri çıxılandan sonra)
+            // 'totals' getter-indən istifadə etmək üçün, sonsuz döngəyə girməmək şərti ilə sadəcə məhsulları hesablayırıq
+            let currentTotal = 0;
+            this.cart.forEach(item => {
+                if (!item.is_gift) {
+                    currentTotal += (Number(item.final_price) * item.qty);
+                }
+            });
+
+            if (currentTotal <= 0) {
+                alert('Səbət boşdur!');
+                return;
+            }
+
+            try {
+                // Yeni yaratdığımız API-yə sorğu göndəririk
+                const response = await fetch(`{{ route('pos.check_promo') }}?code=${this.promoCode}&total=${currentTotal}`);
+                const data = await response.json();
+
+                if(data.valid) {
+                    this.promoDiscountAmount = Number(data.discount_amount);
+                    alert(data.message);
+                } else {
+                    this.promoDiscountAmount = 0;
+                    alert(data.message);
+                }
+            } catch(e) {
+                console.error(e);
+                alert('Promokod yoxlanarkən xəta baş verdi');
+            }
+        },
+
         get totals() {
             let subtotal = 0;
-            let discount = 0;
+            let productDiscount = 0;
             let grandTotal = 0;
 
             this.cart.forEach(item => {
-                // Əgər hədiyyədirsə, müştəri üçün qiymət 0-dır, hesablamaya qatmırıq
                 if (!item.is_gift) {
                     let itemTotal = Number(item.final_price) * item.qty;
-                    let itemDiscount = Number(item.discount_amount) * item.qty;
+                    let itemDisc = Number(item.discount_amount) * item.qty;
 
                     subtotal += (Number(item.price) * item.qty);
-                    discount += itemDiscount;
+                    productDiscount += itemDisc;
                     grandTotal += itemTotal;
                 }
             });
 
-            return { subtotal, discount, grandTotal };
+            // Promokod endirimi tətbiq olunur
+            let finalTotal = grandTotal - this.promoDiscountAmount;
+            if(finalTotal < 0) finalTotal = 0;
+
+            return {
+                subtotal,
+                // Cəmi endirim = Məhsul endirimləri + Promokod
+                discount: productDiscount + this.promoDiscountAmount,
+                grandTotal: finalTotal
+            };
         },
 
-        // Modal Aç
         openCheckout() {
             if (this.cart.length === 0) return;
             this.showCheckoutModal = true;
         },
 
-        // Satışı Tamamla (API Sorğusu)
         async processPayment(method) {
             this.isProcessing = true;
             try {
@@ -133,25 +172,23 @@
                         cart: this.cart,
                         payment_method: method,
                         paid_amount: this.totals.grandTotal,
-                        promo_code: this.promoCode
+                        promo_code: this.promoDiscountAmount > 0 ? this.promoCode : null
                     })
                 });
 
                 const result = await response.json();
 
                 if (result.success) {
-                    // Avtomatik Çap Pəncərəsini Aç
                     const printUrl = '/sales/' + result.order_id + '/print-official';
                     window.open(printUrl, 'ReceiptPrint', 'width=400,height=600,toolbar=0,scrollbars=0,status=0');
 
-                    // Təmizlik işləri
                     this.cart = [];
                     this.products = [];
                     this.searchQuery = '';
                     this.promoCode = '';
+                    this.promoDiscountAmount = 0;
                     this.showCheckoutModal = false;
 
-                    // Axtarışa fokuslan
                     this.$nextTick(() => {
                          if(this.$refs.searchInput) this.$refs.searchInput.focus();
                     });
@@ -171,7 +208,7 @@
         }
      }">
 
-    <!-- YENİ: Kassa Başlığı (Header) -->
+    <!-- Kassa Başlığı -->
     <div class="flex justify-between items-center bg-white p-3 rounded-xl border border-gray-200 shadow-sm shrink-0">
         <div class="flex items-center">
             <div class="h-10 w-10 bg-blue-100 rounded-lg flex items-center justify-center text-blue-600 mr-3">
@@ -183,11 +220,9 @@
             </div>
         </div>
         <div class="flex gap-2">
-            <!-- Geri Qaytarma Düyməsi -->
             <a href="{{ route('returns.index') }}" class="bg-red-50 text-red-600 hover:bg-red-100 border border-red-200 px-4 py-2 rounded-lg text-sm font-bold transition flex items-center shadow-sm">
                 <i class="fa-solid fa-rotate-left mr-2"></i> Geri Qaytarma
             </a>
-
             <a href="{{ route('dashboard') }}" class="bg-gray-100 text-gray-600 hover:bg-gray-200 border border-gray-200 px-4 py-2 rounded-lg text-sm font-medium transition">
                 <i class="fa-solid fa-right-from-bracket mr-1"></i> Çıxış
             </a>
@@ -199,7 +234,6 @@
 
         <!-- SOL TƏRƏF: Məhsul Axtarışı -->
         <div class="w-full md:w-2/3 flex flex-col bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-            <!-- Axtarış Inputu -->
             <div class="p-4 border-b border-gray-200 bg-gray-50 flex gap-4">
                 <div class="relative flex-1">
                     <i class="fa-solid fa-barcode absolute left-4 top-3.5 text-gray-400 text-lg"></i>
@@ -209,7 +243,6 @@
                 </div>
             </div>
 
-            <!-- Məhsul Siyahısı -->
             <div class="flex-1 overflow-y-auto p-4 bg-gray-100">
                 <div x-show="isLoading" class="flex justify-center items-center h-full">
                     <i class="fa-solid fa-circle-notch fa-spin text-4xl text-blue-500"></i>
@@ -257,10 +290,6 @@
                     <i class="fa-solid fa-magnifying-glass text-3xl mb-2"></i>
                     <p>Məhsul tapılmadı.</p>
                 </div>
-                <div x-show="!isLoading && products.length === 0 && searchQuery.length === 0" class="flex flex-col items-center justify-center h-64 text-gray-400">
-                    <i class="fa-solid fa-barcode text-4xl mb-3"></i>
-                    <p>Satışa başlamaq üçün məhsul axtarın</p>
-                </div>
             </div>
         </div>
 
@@ -288,15 +317,12 @@
                                     </template>
                                 </div>
                             </div>
-
-                            <!-- Hədiyyə Düyməsi -->
                             <button @click="toggleGift(index)"
                                     class="text-xs px-2 py-1 rounded border transition mr-2"
                                     :class="item.is_gift ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-500 border-gray-300 hover:bg-purple-50 hover:text-purple-600'"
                                     title="Hədiyyə kimi işarələ">
                                 <i class="fa-solid fa-gift"></i>
                             </button>
-
                             <div class="text-right w-20">
                                 <p class="text-sm font-bold"
                                    :class="item.is_gift ? 'text-purple-600' : 'text-gray-800'"
@@ -316,22 +342,14 @@
                         </div>
                     </div>
                 </template>
-
-                <template x-if="cart.length === 0">
-                    <div class="flex flex-col items-center justify-center h-40 text-gray-400">
-                        <i class="fa-solid fa-basket-shopping text-3xl mb-2"></i>
-                        <p class="text-sm">Səbət boşdur</p>
-                    </div>
-                </template>
             </div>
 
             <!-- Hesablama -->
             <div class="p-4 bg-gray-50 border-t border-gray-200 space-y-2">
-
                 <!-- Promokod -->
                 <div class="flex gap-2 mb-3">
-                    <input type="text" x-model="promoCode" placeholder="Promokod daxil et" class="flex-1 rounded-lg border-gray-300 text-sm focus:ring-blue-500 focus:border-blue-500">
-                    <button class="bg-gray-200 text-gray-700 px-3 py-1 rounded-lg text-sm hover:bg-gray-300 transition">
+                    <input type="text" x-model="promoCode" placeholder="Promokod" class="flex-1 rounded-lg border-gray-300 text-sm focus:ring-blue-500 focus:border-blue-500">
+                    <button @click="applyPromo()" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-lg text-sm hover:bg-gray-300 transition">
                         <i class="fa-solid fa-check"></i>
                     </button>
                 </div>
@@ -363,7 +381,7 @@
         </div>
     </div>
 
-    <!-- POP-UP MODAL (Ödəniş Təsdiqi) -->
+    <!-- POP-UP MODAL -->
     <div x-show="showCheckoutModal" class="fixed inset-0 z-50 overflow-y-auto" style="display: none;" x-cloak>
         <div class="flex items-end justify-center min-h-screen pt-4 px-4 pb-20 text-center sm:block sm:p-0">
             <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity" @click="showCheckoutModal = false"></div>
@@ -380,16 +398,12 @@
                             <p class="text-3xl font-bold text-blue-700 mt-2" x-text="formatPrice(totals.grandTotal)"></p>
                         </div>
                     </div>
-
-                    <!-- Ödəniş Növləri -->
                     <div class="mt-6 grid grid-cols-2 gap-4">
                         <button @click="processPayment('cash')" :disabled="isProcessing" class="w-full bg-green-600 hover:bg-green-700 text-white py-3 rounded-lg font-bold shadow transition flex flex-col items-center justify-center disabled:opacity-50">
-                            <i class="fa-solid fa-money-bill-wave text-2xl mb-1"></i>
-                            NƏĞD
+                            <i class="fa-solid fa-money-bill-wave text-2xl mb-1"></i> NƏĞD
                         </button>
                         <button @click="processPayment('card')" :disabled="isProcessing" class="w-full bg-purple-600 hover:bg-purple-700 text-white py-3 rounded-lg font-bold shadow transition flex flex-col items-center justify-center disabled:opacity-50">
-                            <i class="fa-regular fa-credit-card text-2xl mb-1"></i>
-                            KART
+                            <i class="fa-regular fa-credit-card text-2xl mb-1"></i> KART
                         </button>
                     </div>
                 </div>
