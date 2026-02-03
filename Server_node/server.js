@@ -1,4 +1,4 @@
-require('dotenv').config(); // .env faylını oxumaq üçün kitabxana
+require('dotenv').config(); // .env faylını oxumaq üçün (MÜTLƏQ YUXARIDA OLMALIDIR)
 
 const express = require('express');
 const http = require('http');
@@ -7,10 +7,19 @@ const bodyParser = require('body-parser');
 const cors = require('cors');
 const session = require('express-session');
 
-// --- ADMIN GİRİŞ MƏLUMATLARI (GİZLİ) ---
-// Artıq şifrələr kodun içində deyil, serverin .env faylından oxunur
-const ADMIN_USER = process.env.ADMIN_USER || "admin"; // Əgər tapmasa default 'admin'
-const ADMIN_PASS = process.env.ADMIN_PASS || "admin123"; // Əgər tapmasa default 'admin123'
+// --- ADMIN GİRİŞ MƏLUMATLARI (.env faylından) ---
+const ADMIN_USER = process.env.ADMIN_USER;
+const ADMIN_PASS = process.env.ADMIN_PASS;
+
+// Əgər .env faylı yoxdursa və ya boşdursa, xəbərdarlıq veririk
+if (!ADMIN_USER || !ADMIN_PASS) {
+    console.warn("⚠️ XƏBƏRDARLIQ: .env faylında ADMIN_USER və ya ADMIN_PASS tapılmadı.");
+    console.warn("⚠️ Default olaraq 'admin' / 'admin123' istifadə olunacaq.");
+}
+
+// Default dəyərlər (Yalnız .env işləməsə aktiv olur)
+const FINAL_USER = ADMIN_USER || "admin";
+const FINAL_PASS = ADMIN_PASS || "admin123";
 // -----------------------------
 
 const app = express();
@@ -23,7 +32,7 @@ app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
 
 // Sessiya Tənzimləmələri
 app.use(session({
-    secret: process.env.SESSION_SECRET || 'gizli_açar_rj_pos_secure', // Sessiya açarını da gizlədirik
+    secret: process.env.SESSION_SECRET || 'gizli_açar_rj_pos_secure', // Gizli açarı da .env-dən oxuyuruq
     resave: false,
     saveUninitialized: true,
     cookie: { secure: false } 
@@ -249,7 +258,8 @@ app.get('/', (req, res) => {
 // 2. Giriş Postu
 app.post('/login', (req, res) => {
     const { username, password } = req.body;
-    if (username === ADMIN_USER && password === ADMIN_PASS) {
+    // .env faylındakı məlumatları yoxlayırıq
+    if (username === FINAL_USER && password === FINAL_PASS) {
         req.session.authenticated = true;
         res.redirect('/monitor');
     } else {
@@ -290,4 +300,6 @@ io.on('connection', (socket) => {
 const PORT = 3000;
 server.listen(PORT, () => {
     console.log(`🚀 Server İşləyir: Port ${PORT}`);
+    // Konsolda hansı istifadəçi ilə işlədiyini göstərək (Debug üçün)
+    console.log(`🔑 Login: ${FINAL_USER} / ${FINAL_PASS}`);
 });
