@@ -7,12 +7,14 @@ use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\ProductBatch;
 use App\Models\User;
+use App\Models\Promocode; // Promokod modelini əlavə etdik
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
+use Carbon\Carbon;
 
 class PosController extends Controller
 {
@@ -58,17 +60,16 @@ class PosController extends Controller
             $price = (float) $product->selling_price;
             $discountAmount = 0;
 
-            // --- VERGİ DƏRƏCƏSİNİ batch_code-DAN ÇIXARMAQ ---
+            // Vergi dərəcəsi (Batch kodundan)
             $taxRate = 0;
             $firstBatch = $product->batches->first();
-
             if ($firstBatch && $firstBatch->batch_code) {
-                // Regex: Mötərizə içində rəqəm və % işarəsi axtarır. Məs: (18.00%)
                 if (preg_match('/\((\d+(?:\.\d+)?)%\)/', $firstBatch->batch_code, $matches)) {
                     $taxRate = (float) $matches[1];
                 }
             }
 
+            // Məhsul Endirimi
             if ($product->activeDiscount) {
                 $discount = $product->activeDiscount;
                 if ($discount->type == 'fixed') {
@@ -78,7 +79,7 @@ class PosController extends Controller
                 }
             }
 
-            $finalPrice = $price - $discountAmount;
+            $finalPrice = max(0, $price - $discountAmount);
 
             return [
                 'id' => $product->id,
@@ -103,6 +104,7 @@ class PosController extends Controller
             'cart' => 'required|array|min:1',
             'payment_method' => 'required|in:cash,card,bonus',
             'paid_amount' => 'required|numeric|min:0',
+            'promo_code' => 'nullable|string' // Promokod validasiyası
         ]);
 
         try {
@@ -111,10 +113,10 @@ class PosController extends Controller
             $totalCost = 0;
             $subtotal = 0;
             $totalTax = 0;
-            $totalDiscount = 0;
+            $totalProductDiscount = 0;
             $grandTotal = 0;
 
-            // İstifadəçi təyini
+            // User Təyini
             $userId = Auth::id();
             if (!$userId) {
                 $firstUser = User::first();
@@ -125,10 +127,12 @@ class PosController extends Controller
                 ])->id;
             }
 
+            // Lotereya Kodu
             $lotteryCode = method_exists(Order::class, 'generateUniqueLotteryCode')
                             ? Order::generateUniqueLotteryCode()
                             : (string) rand(1000, 9999);
 
+            // İlkin Order yaradılır (boş dəyərlərlə)
             $order = Order::create([
                 'user_id' => $userId,
                 'receipt_code' => strtoupper(Str::random(8)),
@@ -143,6 +147,7 @@ class PosController extends Controller
                 'status' => 'completed'
             ]);
 
+            // Məhsulları emal edirik
             foreach ($request->cart as $item) {
                 $product = Product::lockForUpdate()->findOrFail($item['id']);
                 $qtyNeeded = $item['qty'];
@@ -151,45 +156,37 @@ class PosController extends Controller
 
                 $originalPrice = (float) $product->selling_price;
 
-                // --- STOKDAN ÇIXILMA VƏ MAYA ÜZRƏ VERGİ HESABI ---
-                // Artıq satış qiymətini göndərməyə ehtiyac yoxdur, maya dəyəri stokun özündə var
+                // Stokdan çıxılma
                 $deductionResult = $this->deductFromStoreStock($product, $qtyNeeded);
-
-                $productTotalCost = $deductionResult['total_cost']; // Ümumi Maya
-                $calculatedTotalTax = $deductionResult['total_tax']; // Maya üzərindən hesablanmış Vergi
+                $productTotalCost = $deductionResult['total_cost'];
+                $calculatedTotalTax = $deductionResult['total_tax'];
 
                 $discountAmount = 0;
-                $lineTotal = 0;
                 $price = $originalPrice;
+                $lineTotal = 0;
 
                 if ($isGift) {
                     // Hədiyyə
                     $price = 0;
                     $lineTotal = 0;
-                    // Hədiyyə olsa belə, bu malın vergisi şirkət üçün xərcdir (itkidir)
                     $itemTaxAmount = $calculatedTotalTax;
-
-                    // Hesabat Xərci: Maya + Vergi
                     $itemCostForReport = $productTotalCost + $calculatedTotalTax;
-
                 } else {
-                    // Normal Satış
+                    // Normal Satış - MƏHSUL ENDİRİMİ
                     if ($product->activeDiscount) {
                         $d = $product->activeDiscount;
                         $discountAmount = ($d->type == 'fixed') ? $d->value : ($price * $d->value / 100);
                     }
 
-                    // Yekun qiymət (Müştərinin ödədiyi)
-                    $finalUnitTestPrice = $price - $discountAmount;
+                    $finalUnitTestPrice = max(0, $price - $discountAmount);
                     $lineTotal = $finalUnitTestPrice * $qtyNeeded;
 
-                    // Vergi (Maya dəyərindən hesablanmış)
+                    // Vergi və Xərc
                     $itemTaxAmount = $calculatedTotalTax;
-
-                    // Normal satışda xərc = Maya Dəyəri
                     $itemCostForReport = $productTotalCost;
                 }
 
+                // OrderItem yaradılır
                 OrderItem::create([
                     'order_id' => $order->id,
                     'product_id' => $product->id,
@@ -204,23 +201,63 @@ class PosController extends Controller
                     'total' => $lineTotal
                 ]);
 
+                // Ümumi dəyərləri toplayırıq
                 $subtotal += ($originalPrice * $qtyNeeded);
-                $totalDiscount += ($discountAmount * $qtyNeeded);
+                $totalProductDiscount += ($discountAmount * $qtyNeeded);
                 $totalTax += $itemTaxAmount;
-                $grandTotal += $lineTotal;
-
+                $grandTotal += $lineTotal; // Məhsul endirimləri artıq buradadır
                 $totalCost += $itemCostForReport;
             }
 
-            $paidAmount = $request->paid_amount ?? $request->received_amount;
+            // PROMOKOD HESABLAMASI
+            $promoDiscount = 0;
+            $promoId = null;
+            $promoCodeStr = null;
 
+            if ($request->promo_code) {
+                $promo = Promocode::where('code', $request->promo_code)->first();
+
+                // Promokod yoxlanışı (Aktivmi? Vaxtı bitibmi? Limiti dolubmu?)
+                if ($promo && $promo->is_active) {
+                    $isValidDate = (!$promo->expires_at || $promo->expires_at > now());
+                    $isValidLimit = (!$promo->usage_limit || $promo->orders_count < $promo->usage_limit);
+
+                    if ($isValidDate && $isValidLimit) {
+                        $promoId = $promo->id;
+                        $promoCodeStr = $promo->code;
+
+                        // Endirim hesablanması
+                        if ($promo->discount_type == 'percent') {
+                            $promoDiscount = $grandTotal * ($promo->discount_value / 100);
+                        } else {
+                            $promoDiscount = $promo->discount_value;
+                        }
+
+                        // Promokod məbləği Yekun Məbləğdən çox ola bilməz
+                        $promoDiscount = min($promoDiscount, $grandTotal);
+
+                        // İstifadə sayını artırırıq
+                        $promo->increment('orders_count');
+                    }
+                }
+            }
+
+            // Yekun Məbləğdən Promokodu çıxırıq
+            $grandTotal -= $promoDiscount;
+
+            // Cəmi endirim = Məhsul endirimləri + Promokod endirimi
+            $totalDiscountAll = $totalProductDiscount + $promoDiscount;
+
+            // Order-i yeniləyirik
             $order->update([
                 'subtotal' => $subtotal,
-                'total_discount' => $totalDiscount,
+                'total_discount' => $totalDiscountAll,
                 'total_tax' => $totalTax,
-                'grand_total' => $grandTotal,
+                'grand_total' => max(0, $grandTotal),
                 'total_cost' => $totalCost,
-                'change_amount' => $paidAmount - $grandTotal
+                'change_amount' => ($request->paid_amount ?? 0) - max(0, $grandTotal),
+                'promo_code' => $promoCodeStr,
+                'promocode_id' => $promoId
             ]);
 
             DB::commit();
@@ -230,7 +267,8 @@ class PosController extends Controller
                 'message' => 'Satış uğurla tamamlandı!',
                 'order_id' => $order->id,
                 'receipt_code' => $order->receipt_code,
-                'lottery_code' => $order->lottery_code
+                'lottery_code' => $order->lottery_code,
+                'promo_applied' => $promoDiscount > 0
             ]);
 
         } catch (\Exception $e) {
@@ -243,9 +281,7 @@ class PosController extends Controller
         }
     }
 
-    /**
-     * Stokdan silir və Maya Dəyərinə əsasən Vergi hesablayır
-     */
+    // Stokdan silmə funksiyası (Dəyişməyib, olduğu kimi qalır)
     private function deductFromStoreStock($product, $qtyNeeded)
     {
         $batches = ProductBatch::where('product_id', $product->id)
@@ -270,19 +306,14 @@ class PosController extends Controller
             if ($remainingQty <= 0) break;
 
             $take = min($remainingQty, $batch->current_quantity);
-
-            // 1. Maya Dəyəri
             $totalDeductedCost += ($take * $batch->cost_price);
 
-            // 2. Vergi (batch_code içindən Parse edilir)
             $batchTaxRate = 0;
             if (preg_match('/\((\d+(?:\.\d+)?)%\)/', $batch->batch_code, $matches)) {
                 $batchTaxRate = (float) $matches[1];
             }
 
             if ($batchTaxRate > 0) {
-                // DÜZƏLİŞ: Vergi MAYA DƏYƏRİNİN faizi kimi hesablanır
-                // Vergi = (Maya * Faiz) / 100
                 $chunkTax = ($batch->cost_price * ($batchTaxRate / 100)) * $take;
                 $totalReferenceTax += $chunkTax;
             }

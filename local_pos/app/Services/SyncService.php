@@ -6,7 +6,8 @@ use App\Models\Order;
 use App\Models\Product;
 use App\Models\ProductBatch;
 use App\Models\Setting;
-use App\Models\Partner; // Partnyor modeli varsa
+use App\Models\Partner;
+use App\Models\Promocode;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\DB;
 use Carbon\Carbon;
@@ -17,56 +18,53 @@ class SyncService
 
     public function __construct()
     {
-        // Node.js serverinin ünvanı (.env faylından və ya settings-dən)
-        // Məsələn: http://vmi3036725.contaboserver.net:3000
         $this->serverUrl = Setting::where('key', 'server_url')->value('value');
         if ($this->serverUrl) {
             $this->serverUrl = rtrim($this->serverUrl, '/');
         }
     }
 
-    /**
-     * Bütün Hesabatları Hesablayır və Node.js-ə Göndərir
-     */
     public function pushData()
     {
         if (!$this->serverUrl) return ['status' => false, 'message' => 'Server URL yoxdur'];
 
-        // 1. GÜNLÜK SATIŞ HESABATI
+        // 1. STATİSTİKALAR
         $today = Carbon::today();
         $todayStats = Order::whereDate('created_at', $today)
             ->select(
                 DB::raw('sum(grand_total) as total_sales'),
                 DB::raw('count(*) as count_sales'),
-                DB::raw('sum(grand_total - total_cost - total_tax) as net_profit') // Təxmini mənfəət
+                DB::raw('sum(grand_total - total_cost - total_tax) as net_profit')
             )->first();
 
-        // 2. STOK VƏ ANBAR DƏYƏRİ (Sizin ReportController-dəki məntiq)
-        // Yaddaş dolmasın deyə sadə sorğu ilə hesablayırıq
+        // Anbar dəyərləri
         $stockStats = DB::table('product_batches')
             ->where('current_quantity', '>', 0)
-            ->select(
-                DB::raw('SUM(current_quantity * cost_price) as total_cost_value'), // Maya dəyəri
-                DB::raw('COUNT(*) as batch_count')
-            )->first();
+            ->select(DB::raw('SUM(current_quantity * cost_price) as total_cost_value'))->first();
 
-        // Satış dəyərini tapmaq üçün Product ilə join etmək lazımdır
         $totalSaleValue = DB::table('product_batches')
             ->join('products', 'product_batches.product_id', '=', 'products.id')
             ->where('product_batches.current_quantity', '>', 0)
             ->sum(DB::raw('product_batches.current_quantity * products.selling_price'));
 
-        // 3. PARTNYOR STATİSTİKASI (Əgər Partner modeli varsa)
-        $partnerCount = 0;
-        if (class_exists(Partner::class)) {
-            $partnerCount = Partner::count();
-        }
+        $partnerCount = class_exists(Partner::class) ? Partner::count() : 0;
+        $criticalStockCount = Product::whereRaw('alert_limit > quantity')->count();
 
-        // 4. KRİTİK STOK SAYI (ReportController-dən)
-        $criticalStockCount = Product::whereRaw('alert_limit > (select coalesce(sum(current_quantity), 0) from product_batches where product_batches.product_id = products.id)')->count();
+        // 2. SİYAHILAR (YENİ ƏLAVƏ)
+        // Məhsul siyahısı (Stoku olanlar və ya hamısı)
+        // Yaddaşa qənaət üçün sadəcə lazım olan sütunları seçirik
+        $productsList = Product::select('name', 'barcode', 'quantity', 'selling_price', 'cost_price', 'is_active')
+            ->orderBy('quantity', 'desc') // Çoxdan aza doğru
+            ->get()
+            ->toArray();
 
-        // 5. SON SATIŞLAR (Canlı axın üçün)
-        $latestOrders = Order::latest()->take(5)->get()->map(function($order) {
+        // Promokod siyahısı
+        $promocodesList = class_exists(Promocode::class)
+            ? Promocode::withCount('orders')->get()->toArray()
+            : [];
+
+        // Son satışlar
+        $latestOrders = Order::latest()->take(10)->get()->map(function($order) {
             return [
                 'receipt_code' => $order->receipt_code,
                 'grand_total' => $order->grand_total,
@@ -76,30 +74,34 @@ class SyncService
             ];
         });
 
-        // PAKETİ HAZIRLAYIRIQ
+        // TAM PAKET
         $payload = [
-            'today_sales' => $todayStats->total_sales ?? 0,
-            'today_count' => $todayStats->count_sales ?? 0,
-            'today_profit' => $todayStats->net_profit ?? 0,
-            'warehouse_cost' => $stockStats->total_cost_value ?? 0,
-            'warehouse_sale' => $totalSaleValue ?? 0,
-            'potential_profit' => $totalSaleValue - ($stockStats->total_cost_value ?? 0),
-            'critical_stock' => $criticalStockCount,
-            'partner_count' => $partnerCount,
-            'latest_orders' => $latestOrders
+            'stats' => [
+                'today_sales' => $todayStats->total_sales ?? 0,
+                'today_count' => $todayStats->count_sales ?? 0,
+                'today_profit' => $todayStats->net_profit ?? 0,
+                'warehouse_cost' => $stockStats->total_cost_value ?? 0,
+                'warehouse_sale' => $totalSaleValue ?? 0,
+                'potential_profit' => $totalSaleValue - ($stockStats->total_cost_value ?? 0),
+                'critical_stock' => $criticalStockCount,
+                'partner_count' => $partnerCount,
+            ],
+            'latest_orders' => $latestOrders,
+            'products' => $productsList,      // <--- Yeni
+            'promocodes' => $promocodesList   // <--- Yeni
         ];
 
-        // GÖNDƏRİRİK
         try {
-            Http::timeout(5)->post($this->serverUrl . '/api/report', [
-                'type' => 'full_report', // Yeni tip təyin edirik
+            // Data böyük ola bilər deyə timeout artırılır
+            Http::timeout(15)->post($this->serverUrl . '/api/report', [
+                'type' => 'full_report',
                 'payload' => $payload
             ]);
 
-            return ['status' => true, 'message' => 'Hesabatlar Node.js-ə göndərildi'];
+            return ['status' => true, 'message' => 'Tam hesabat Monitora göndərildi'];
 
         } catch (\Exception $e) {
-            return ['status' => false, 'message' => 'Node.js Xətası: ' . $e->getMessage()];
+            return ['status' => false, 'message' => 'Monitor Xətası: ' . $e->getMessage()];
         }
     }
 
