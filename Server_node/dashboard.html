@@ -49,7 +49,7 @@ class SyncService
                 DB::raw('SUM(current_quantity * cost_price) as total_cost_value'), // Maya dəyəri
                 DB::raw('COUNT(*) as batch_count')
             )->first();
-
+        
         // Satış dəyərini tapmaq üçün Product ilə join etmək lazımdır
         $totalSaleValue = DB::table('product_batches')
             ->join('products', 'product_batches.product_id', '=', 'products.id')
@@ -95,7 +95,7 @@ class SyncService
                 'type' => 'full_report', // Yeni tip təyin edirik
                 'payload' => $payload
             ]);
-
+            
             return ['status' => true, 'message' => 'Hesabatlar Node.js-ə göndərildi'];
 
         } catch (\Exception $e) {
