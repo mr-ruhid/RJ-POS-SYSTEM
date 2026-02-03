@@ -1,4 +1,4 @@
-require('dotenv').config(); 
+require('dotenv').config();
 
 const express = require('express');
 const http = require('http');
@@ -6,17 +6,19 @@ const { Server } = require("socket.io");
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const session = require('express-session');
+const TelegramBot = require('node-telegram-bot-api');
+const fs = require('fs');
 
-// --- ADMIN GİRİŞ MƏLUMATLARI ---
+// --- TƏNZİMLƏMƏLƏR ---
 const ADMIN_USER = process.env.ADMIN_USER || "admin";
 const ADMIN_PASS = process.env.ADMIN_PASS || "admin123";
+const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
 app.set('trust proxy', 1);
-
 app.use(cors());
 app.use(bodyParser.json({ limit: '50mb' }));
 app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
@@ -25,10 +27,118 @@ app.use(session({
     secret: process.env.SESSION_SECRET || 'gizli_açar_rj_pos_secure',
     resave: false,
     saveUninitialized: true,
-    cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 } 
+    cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 }
 }));
 
-let currentData = null;
+// --- YADDAŞ ---
+// Son gələn tam paketi yaddaşda saxlayırıq ki, bot sual verəndə cavab verə bilsin
+let currentPayload = null;
+let lastProcessedOrderCode = null; // Təkrar bildiriş getməsin deyə
+
+// --- TELEGRAM BOT ---
+let bot = null;
+if (TELEGRAM_TOKEN) {
+    try {
+        bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+        console.log("🤖 Telegram Bot Aktivdir");
+
+        // /start Komandası
+        bot.onText(/\/start/, (msg) => {
+            const chatId = msg.chat.id;
+            const name = msg.from.first_name;
+            
+            const opts = {
+                reply_markup: {
+                    keyboard: [
+                        ['📊 Günlük Hesabat', '📅 Aylıq Hesabat'],
+                        ['💰 Balansım', 'ℹ️ Məlumat']
+                    ],
+                    resize_keyboard: true,
+                    one_time_keyboard: false
+                }
+            };
+            
+            bot.sendMessage(chatId, `Salam, ${name}! 👋\nSizin ID: \`${chatId}\`\n\nZəhmət olmasa bu ID-ni Mağaza admininə təqdim edin ki, hesabınızla əlaqələndirilsin.`, { parse_mode: 'Markdown', ...opts });
+        });
+
+        // Düymələrə reaksiya (Statistika)
+        bot.on('message', (msg) => {
+            const chatId = msg.chat.id;
+            const text = msg.text;
+
+            if (!currentPayload || !currentPayload.partners) {
+                if (text !== '/start') bot.sendMessage(chatId, "⚠️ Hələlik məlumat yoxdur. Mağaza sinxronizasiya edilməyib.");
+                return;
+            }
+
+            // Chat ID-yə görə partnyoru tapırıq
+            const partner = currentPayload.partners.find(p => p.telegram_chat_id == chatId);
+
+            if (!partner) {
+                if (text !== '/start') bot.sendMessage(chatId, "❌ Sizin hesabınız hələ təsdiqlənməyib və ya əlaqələndirilməyib.");
+                return;
+            }
+
+            // Partnyorun promokodlarını tapırıq
+            const myPromos = currentPayload.promocodes.filter(pc => pc.partner_id === partner.id);
+            
+            if (text === '📊 Günlük Hesabat') {
+                // Burada günlük satış hesabatı olmalıdır (Mağaza bunu hesablayıb göndərməlidir)
+                // Hələlik ümumi statistikadan nümunə:
+                let msg = `📅 **Günlük Hesabat**\n`;
+                msg += `👤 Partnyor: ${partner.name}\n\n`;
+                
+                if (myPromos.length > 0) {
+                    myPromos.forEach(p => {
+                        msg += `🎫 Kod: *${p.code}* - ${p.orders_count} istifadə\n`;
+                    });
+                } else {
+                    msg += "Sizin aktiv promokodunuz yoxdur.";
+                }
+                bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' });
+            } 
+            else if (text === '💰 Balansım') {
+                bot.sendMessage(chatId, `💰 **Cari Balans:** ${partner.balance} ₼\n(Yenilənmə vaxtı: ${new Date().toLocaleTimeString()})`, { parse_mode: 'Markdown' });
+            }
+            else if (text === '📅 Aylıq Hesabat') {
+                 bot.sendMessage(chatId, "📅 Aylıq statistika hazırlanır...");
+            }
+        });
+
+    } catch (error) {
+        console.error("Telegram Bot Xətası:", error.message);
+    }
+}
+
+// --- TELEGRAM BİLDİRİŞ FUNKSİYASI ---
+function notifyPartnerAboutSale(order, promocodes, partners) {
+    if (!bot || !order.promo_code) return;
+
+    // Promokodu tap
+    const promo = promocodes.find(p => p.code === order.promo_code);
+    if (!promo) return;
+
+    // Partnyoru tap
+    const partner = partners.find(p => p.id === promo.partner_id);
+    if (!partner || !partner.telegram_chat_id) return;
+
+    // Komissiya hesabı (sadəlik üçün: endirim məbləğinin yarısı və ya sabit faiz)
+    // Qeyd: Real komissiya məbləği Mağazadan gəlsə daha dəqiq olar.
+    // Burada sadəcə məlumat veririk.
+    
+    const message = `
+🎉 **Yeni Satış!**
+    
+🎫 Kod: *${order.promo_code}*
+💵 Satış Məbləği: ${order.grand_total} ₼
+⏰ Saat: ${order.time}
+
+Təbriklər! Balansınız yeniləndi.
+    `;
+
+    bot.sendMessage(partner.telegram_chat_id, message, { parse_mode: 'Markdown' });
+}
+
 
 // ==========================================
 // 1. HTML ŞABLONLAR
@@ -47,297 +157,147 @@ const loginHTML = `
 <body class="bg-slate-900 h-screen flex items-center justify-center">
     <div class="bg-slate-800 p-8 rounded-xl shadow-2xl border border-slate-700 w-96">
         <div class="text-center mb-8">
-            <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-blue-500/20 text-blue-500 mb-4">
-                <i class="fa-solid fa-shield-halved text-3xl"></i>
-            </div>
             <h1 class="text-2xl font-bold text-white">Admin Girişi</h1>
             <p class="text-slate-400 text-sm mt-2">Monitorinq mərkəzinə daxil olun</p>
         </div>
-        <div id="error-msg" class="hidden bg-red-500/10 border border-red-500/50 text-red-500 text-sm p-3 rounded-lg mb-4 text-center">
-            İstifadəçi adı və ya şifrə yanlışdır!
-        </div>
         <form action="login" method="POST" class="space-y-5">
-            <div>
-                <label class="block text-slate-300 text-sm font-medium mb-1">İstifadəçi Adı</label>
-                <div class="relative">
-                    <span class="absolute left-3 top-3 text-slate-500"><i class="fa-solid fa-user"></i></span>
-                    <input type="text" name="username" required class="w-full bg-slate-900 border border-slate-700 rounded-lg py-2.5 pl-10 pr-4 text-white focus:outline-none focus:border-blue-500 transition">
-                </div>
-            </div>
-            <div>
-                <label class="block text-slate-300 text-sm font-medium mb-1">Şifrə</label>
-                <div class="relative">
-                    <span class="absolute left-3 top-3 text-slate-500"><i class="fa-solid fa-lock"></i></span>
-                    <input type="password" name="password" required class="w-full bg-slate-900 border border-slate-700 rounded-lg py-2.5 pl-10 pr-4 text-white focus:outline-none focus:border-blue-500 transition">
-                </div>
-            </div>
-            <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition shadow-lg shadow-blue-500/30">
-                Daxil Ol <i class="fa-solid fa-arrow-right ml-2"></i>
-            </button>
+            <input type="text" name="username" placeholder="İstifadəçi Adı" required class="w-full bg-slate-900 border border-slate-700 rounded-lg py-3 px-4 text-white">
+            <input type="password" name="password" placeholder="Şifrə" required class="w-full bg-slate-900 border border-slate-700 rounded-lg py-3 px-4 text-white">
+            <button class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition">Daxil Ol</button>
         </form>
     </div>
-    <script>
-        const urlParams = new URLSearchParams(window.location.search);
-        if(urlParams.has('error')) { document.getElementById('error-msg').classList.remove('hidden'); }
-    </script>
 </body>
 </html>
 `;
 
+// Dashboard HTML - "Modal" çıxarıldı, "Partnyorlar" cədvəli sadələşdirildi
 const dashboardHTML = `
 <!DOCTYPE html>
 <html lang="az">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RJ POS - Monitorinq</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="socket.io/socket.io.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         body { background-color: #0f172a; color: #e2e8f0; font-family: sans-serif; overflow: hidden; }
-        
-        /* Sidebar */
-        .sidebar { width: 260px; background: #1e293b; height: 100vh; position: fixed; left: 0; top: 0; border-right: 1px solid #334155; display: flex; flex-direction: column; }
-        .logo-area { height: 70px; display: flex; align-items: center; padding-left: 24px; border-bottom: 1px solid #334155; }
-        .nav-item { display: flex; align-items: center; padding: 14px 24px; color: #94a3b8; cursor: pointer; transition: all 0.3s; border-left: 4px solid transparent; }
-        .nav-item:hover { background: #2a384b; color: #fff; }
-        .nav-item.active { background: #334155; color: #fff; border-left-color: #3b82f6; }
-        .nav-item i { width: 24px; margin-right: 10px; font-size: 1.1rem; }
-        
-        /* Content */
-        .content { margin-left: 260px; padding: 30px; height: 100vh; overflow-y: auto; }
-        
-        /* Cards & Tables */
+        .sidebar { width: 260px; background: #1e293b; height: 100vh; position: fixed; left: 0; top: 0; border-right: 1px solid #334155; }
+        .content { margin-left: 260px; padding: 20px; height: 100vh; overflow-y: auto; }
+        .nav-link { display: flex; align-items: center; padding: 12px 20px; color: #94a3b8; cursor: pointer; transition: 0.3s; border-left: 4px solid transparent; }
+        .nav-link:hover, .nav-link.active { background: #334155; color: #fff; border-left-color: #3b82f6; }
+        .nav-link i { width: 25px; font-size: 1.2rem; }
         .stat-card { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; }
-        table { width: 100%; border-collapse: separate; border-spacing: 0; }
-        th { text-align: left; padding: 14px; background: #253042; color: #94a3b8; font-size: 0.85rem; font-weight: 600; position: sticky; top: 0; }
-        td { padding: 14px; border-bottom: 1px solid #334155; color: #cbd5e1; font-size: 0.9rem; }
-        tr:hover td { background: #263344; }
-        
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: #0f172a; }
-        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
-        
+        table { width: 100%; border-collapse: collapse; }
+        th { text-align: left; padding: 12px; background: #253042; color: #94a3b8; position: sticky; top: 0; }
+        td { padding: 12px; border-bottom: 1px solid #334155; color: #cbd5e1; }
         .hidden-page { display: none; }
-        .animate-enter { animation: enterPage 0.4s ease-out; }
-        @keyframes enterPage { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
     </style>
 </head>
 <body>
-
-    <!-- SIDEBAR -->
-    <div class="sidebar">
-        <div class="logo-area">
-            <h1 class="text-2xl font-bold text-white flex items-center">
-                <i class="fa-solid fa-layer-group text-blue-500 mr-2"></i> RJ POS
-            </h1>
+    <div class="sidebar flex flex-col">
+        <div class="h-16 flex items-center px-6 border-b border-slate-700">
+            <h1 class="text-xl font-bold text-white"><i class="fa-brands fa-telegram text-blue-500 mr-2"></i> RJ POS</h1>
         </div>
-        
-        <div class="flex-1 py-6 space-y-1 overflow-y-auto">
-            <div class="nav-item active" onclick="switchPage('dashboard', this)">
-                <i class="fa-solid fa-chart-pie"></i> İcmal
-            </div>
-            <div class="nav-item" onclick="switchPage('products', this)">
-                <i class="fa-solid fa-boxes-stacked"></i> Məhsullar
-            </div>
-            <div class="nav-item" onclick="switchPage('warehouse', this)">
-                <i class="fa-solid fa-warehouse"></i> Anbar & Partiyalar
-            </div>
-            <div class="nav-item" onclick="switchPage('lottery', this)">
-                <i class="fa-solid fa-ticket"></i> Lotereya
-            </div>
-            <div class="nav-item" onclick="switchPage('promocodes', this)">
-                <i class="fa-solid fa-tags"></i> Promokodlar
-            </div>
+        <div class="flex-1 py-6 space-y-1">
+            <div class="nav-link active" onclick="switchPage('dashboard', this)"><i class="fa-solid fa-chart-pie"></i> İcmal</div>
+            <div class="nav-link" onclick="switchPage('partners', this)"><i class="fa-solid fa-users"></i> Partnyorlar</div>
+            <div class="nav-link" onclick="switchPage('products', this)"><i class="fa-solid fa-box-open"></i> Məhsullar</div>
+            <div class="nav-link" onclick="switchPage('warehouse', this)"><i class="fa-solid fa-warehouse"></i> Anbar</div>
+            <div class="nav-link" onclick="switchPage('lottery', this)"><i class="fa-solid fa-ticket"></i> Lotereya</div>
+            <div class="nav-link" onclick="switchPage('promocodes', this)"><i class="fa-solid fa-tags"></i> Promokodlar</div>
         </div>
-
-        <div class="p-6 border-t border-slate-700">
-            <div id="connection-status" class="flex items-center space-x-2 text-sm text-gray-400 mb-3 bg-slate-800 p-2 rounded justify-center">
-                <span class="w-2 h-2 rounded-full bg-red-500"></span><span>Offline</span>
-            </div>
-            <a href="logout" class="block text-center text-xs text-red-400 hover:text-red-300 font-bold border border-red-900/30 bg-red-900/10 py-2 rounded">ÇIXIŞ ET</a>
+        <div class="p-4 border-t border-slate-700">
+            <div id="status" class="text-center text-xs text-red-500 font-bold mb-2">Offline</div>
+            <a href="logout" class="block text-center text-xs text-gray-400 hover:text-white border border-gray-700 py-2 rounded">ÇIXIŞ</a>
         </div>
     </div>
 
-    <!-- CONTENT -->
     <div class="content">
-        
-        <!-- 1. DASHBOARD -->
-        <div id="page-dashboard" class="animate-enter">
-            <h2 class="text-3xl font-bold text-white mb-8">Bu Günün Statistikası</h2>
+        <!-- DASHBOARD -->
+        <div id="page-dashboard">
+            <h2 class="text-2xl font-bold text-white mb-6">Canlı Monitorinq</h2>
             <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-                <div class="stat-card border-l-4 border-blue-500"><p class="text-gray-400 text-xs uppercase tracking-wider">Günlük Satış</p><h3 class="text-3xl font-bold text-white mt-1" id="stat-sales">0.00 ₼</h3><p class="text-sm text-blue-400 mt-2 flex items-center"><i class="fa-solid fa-receipt mr-1"></i> <span id="stat-count">0</span> çek</p></div>
-                <div class="stat-card border-l-4 border-green-500"><p class="text-gray-400 text-xs uppercase tracking-wider">Xalis Mənfəət</p><h3 class="text-3xl font-bold text-green-400 mt-1" id="stat-profit">0.00 ₼</h3><p class="text-sm text-gray-500 mt-2">Təxmini gəlir</p></div>
-                <div class="stat-card border-l-4 border-orange-500"><p class="text-gray-400 text-xs uppercase tracking-wider">Anbar Dəyəri</p><h3 class="text-2xl font-bold text-white mt-1" id="stat-stock-val">0.00 ₼</h3><p class="text-sm text-orange-400 mt-2">Maya dəyəri</p></div>
-                <div class="stat-card border-l-4 border-purple-500"><p class="text-gray-400 text-xs uppercase tracking-wider">Partnyorlar</p><h3 class="text-3xl font-bold text-white mt-1" id="stat-partners">0</h3><p class="text-sm text-purple-400 mt-2">Aktiv</p></div>
+                <div class="stat-card border-l-4 border-blue-500"><p class="text-gray-400 text-xs uppercase">Satış</p><h3 class="text-3xl font-bold text-white mt-1" id="stat-sales">0.00 ₼</h3></div>
+                <div class="stat-card border-l-4 border-green-500"><p class="text-gray-400 text-xs uppercase">Mənfəət</p><h3 class="text-3xl font-bold text-green-400 mt-1" id="stat-profit">0.00 ₼</h3></div>
+                <div class="stat-card border-l-4 border-orange-500"><p class="text-gray-400 text-xs uppercase">Anbar</p><h3 class="text-2xl font-bold text-white mt-1" id="stat-stock-val">0.00 ₼</h3></div>
+                <div class="stat-card border-l-4 border-purple-500"><p class="text-gray-400 text-xs uppercase">Partnyorlar</p><h3 class="text-3xl font-bold text-white mt-1" id="stat-partners">0</h3></div>
             </div>
             <div class="stat-card">
-                <div class="flex justify-between items-center mb-6">
-                    <h3 class="text-xl font-bold text-white">Son Əməliyyatlar</h3>
-                    <span class="bg-blue-900 text-blue-300 text-xs px-2 py-1 rounded border border-blue-700">Canlı Axın</span>
-                </div>
-                <table class="w-full">
-                    <thead><tr><th>Saat</th><th>Qəbz №</th><th>Ödəniş</th><th class="text-center">Məhsul</th><th class="text-right">Məbləğ</th></tr></thead>
-                    <tbody id="table-orders"><tr><td colspan="5" class="text-center py-8 text-gray-500">Məlumat yoxdur</td></tr></tbody>
-                </table>
+                <h3 class="text-lg font-bold text-white mb-4">Son Satışlar</h3>
+                <table class="w-full"><thead><tr><th>Saat</th><th>Qəbz</th><th>Məbləğ</th><th>Promokod</th></tr></thead><tbody id="table-orders"></tbody></table>
             </div>
         </div>
 
-        <!-- 2. MƏHSULLAR -->
-        <div id="page-products" class="hidden-page animate-enter">
-            <div class="flex justify-between items-center mb-6"><h2 class="text-3xl font-bold text-white">Məhsul Bazası</h2><input type="text" onkeyup="filterTable('tbody-products', this.value)" placeholder="Axtar..." class="bg-slate-800 border border-slate-600 text-white px-4 py-2 rounded-lg w-64 focus:outline-none focus:border-blue-500"></div>
-            <div class="stat-card overflow-hidden">
-                <div class="overflow-y-auto max-h-[700px]">
-                    <table class="w-full">
-                        <thead><tr><th>Məhsul Adı</th><th>Barkod</th><th class="text-center">Ümumi Stok</th><th class="text-right">Maya</th><th class="text-right">Satış</th><th class="text-center">Status</th></tr></thead>
-                        <tbody id="tbody-products"><tr><td colspan="6" class="text-center py-8 text-gray-500">Yüklənir...</td></tr></tbody>
-                    </table>
-                </div>
-            </div>
+        <!-- PARTNERS (MODALSIZ) -->
+        <div id="page-partners" class="hidden-page">
+            <h2 class="text-2xl font-bold text-white mb-6">Partnyorlar</h2>
+            <div class="stat-card"><table class="w-full"><thead><tr><th>Ad</th><th>Telefon</th><th>Telegram ID</th><th>Balans</th></tr></thead><tbody id="table-partners"></tbody></table></div>
         </div>
+        
+        <!-- DIGER SƏHİFƏLƏR (MƏHSUL, ANBAR...) -->
+        <div id="page-products" class="hidden-page"><h2 class="text-2xl font-bold text-white mb-6">Məhsullar</h2><div class="stat-card overflow-y-auto max-h-[700px]"><table class="w-full"><thead><tr><th>Ad</th><th>Barkod</th><th class="text-center">Stok</th><th class="text-right">Qiymət</th></tr></thead><tbody id="table-products"></tbody></table></div></div>
+        <div id="page-warehouse" class="hidden-page"><h2 class="text-2xl font-bold text-white mb-6">Anbar</h2><div class="stat-card overflow-y-auto max-h-[700px]"><table class="w-full"><thead><tr><th>Məhsul</th><th>Kod</th><th class="text-center">Say</th><th class="text-right">Maya</th></tr></thead><tbody id="tbody-batches"></tbody></table></div></div>
+        <div id="page-lottery" class="hidden-page"><h2 class="text-2xl font-bold text-white mb-6">Lotereya</h2><div class="stat-card"><table class="w-full"><thead><tr><th>Qəbz</th><th>Lotereya</th><th class="text-right">Məbləğ</th></tr></thead><tbody id="tbody-lottery"></tbody></table></div></div>
+        <div id="page-promocodes" class="hidden-page"><h2 class="text-2xl font-bold text-white mb-6">Promokodlar</h2><div class="stat-card"><table class="w-full"><thead><tr><th>Kod</th><th>Endirim</th><th class="text-center">İstifadə</th><th class="text-center">Status</th></tr></thead><tbody id="table-promos"></tbody></table></div></div>
 
-        <!-- 3. ANBAR & PARTİYALAR (YENİ) -->
-        <div id="page-warehouse" class="hidden-page animate-enter">
-            <h2 class="text-3xl font-bold text-white mb-8">Anbar & Partiyalar</h2>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-                <div class="stat-card bg-slate-800/50 border-orange-500/30"><div class="flex justify-between items-center"><div><p class="text-gray-400">Ümumi Maya Dəyəri</p><h3 class="text-4xl font-bold text-white mt-2" id="w-cost">0.00 ₼</h3></div><i class="fa-solid fa-boxes-packing text-5xl text-orange-500/20"></i></div></div>
-                <div class="stat-card bg-slate-800/50 border-green-500/30"><div class="flex justify-between items-center"><div><p class="text-gray-400">Potensial Satış Dəyəri</p><h3 class="text-4xl font-bold text-white mt-2" id="w-sale">0.00 ₼</h3></div><i class="fa-solid fa-chart-line text-5xl text-green-500/20"></i></div></div>
-            </div>
-            <div class="stat-card">
-                <h3 class="text-xl font-bold text-white mb-4 border-b border-slate-700 pb-2">Partiya Detalları (Batches)</h3>
-                <div class="overflow-y-auto max-h-[600px]">
-                    <table class="w-full">
-                        <thead><tr><th>Məhsul</th><th>Partiya Kodu</th><th class="text-center">Qalıq (Say)</th><th class="text-right">Alış Qiyməti</th><th class="text-right">Maya Cəmi</th><th>Tarix</th></tr></thead>
-                        <tbody id="tbody-batches">
-                            <tr><td colspan="6" class="text-center py-8 text-gray-500">Partiya məlumatı yüklənməyib</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        <!-- 4. LOTEREYA (YENİ) -->
-        <div id="page-lottery" class="hidden-page animate-enter">
-            <h2 class="text-3xl font-bold text-white mb-6">Lotereya Kodları</h2>
-            <div class="stat-card">
-                <table class="w-full">
-                    <thead><tr><th>Tarix</th><th>Qəbz №</th><th>Lotereya Kodu</th><th class="text-right">Məbləğ</th></tr></thead>
-                    <tbody id="tbody-lottery">
-                        <tr><td colspan="4" class="text-center py-8 text-gray-500">Məlumat yoxdur</td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- 5. PROMOKODLAR -->
-        <div id="page-promocodes" class="hidden-page animate-enter">
-            <h2 class="text-3xl font-bold text-white mb-6">Promokodlar</h2>
-            <div class="stat-card"><table class="w-full"><thead><tr><th>Kod</th><th>Endirim</th><th class="text-center">İstifadə Sayı</th><th class="text-center">Status</th></tr></thead><tbody id="tbody-promos"><tr><td colspan="4" class="text-center py-8 text-gray-500">Məlumat yoxdur</td></tr></tbody></table></div>
-        </div>
     </div>
 
     <script>
         const socket = io();
-        let globalData = null;
-
-        function switchPage(pageId, element) {
-            document.querySelectorAll('[id^="page-"]').forEach(el => el.classList.add('hidden-page'));
-            document.getElementById('page-' + pageId).classList.remove('hidden-page');
-            document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-            element.classList.add('active');
+        function switchPage(id, el) {
+            document.querySelectorAll('.hidden-page, #page-dashboard').forEach(d => { if(d.id !== 'page-'+id) d.style.display='none'; });
+            document.getElementById('page-'+id).style.display='block';
+            document.querySelectorAll('.nav-link').forEach(n => n.classList.remove('active'));
+            el.classList.add('active');
         }
+        socket.on('connect', () => document.getElementById('status').innerText = 'Online (Yaşıl)');
+        
+        socket.on('live_update', (data) => {
+            if(data.type === 'full_report') renderData(data.payload);
+        });
 
-        socket.on('connect', () => { document.getElementById('connection-status').innerHTML = '<span class="w-2 h-2 rounded-full bg-green-500"></span><span class="text-green-400">Online</span>'; socket.emit('request_last_data'); });
-        socket.on('disconnect', () => { document.getElementById('connection-status').innerHTML = '<span class="w-2 h-2 rounded-full bg-red-500"></span><span class="text-red-400">Offline</span>'; });
-        socket.on('live_update', (data) => { if (data.type === 'full_report') renderAll(data.payload); });
+        function renderData(p) {
+            const s = p.stats;
+            document.getElementById('stat-sales').innerText = s.today_sales + ' ₼';
+            document.getElementById('stat-profit').innerText = s.today_profit + ' ₼';
+            document.getElementById('stat-stock-val').innerText = s.warehouse_cost + ' ₼';
+            document.getElementById('stat-partners').innerText = s.partner_count;
 
-        function renderAll(payload) {
-            globalData = payload;
-            const s = payload.stats;
-
-            // 1. DASHBOARD
-            setVal('d-sales', formatMoney(s.today_sales));
-            setVal('d-count', s.today_count);
-            setVal('d-profit', formatMoney(s.today_profit));
-            setVal('d-stock-val', formatMoney(s.warehouse_cost));
-            setVal('d-partners', s.partner_count);
-
-            if (payload.latest_orders) {
-                const tbody = document.getElementById('table-recent-orders');
-                if (payload.latest_orders.length > 0) tbody.innerHTML = '';
-                payload.latest_orders.forEach(o => {
-                    tbody.innerHTML += \`<tr><td class="font-mono text-gray-400">\${o.time}</td><td class="font-bold text-white">#\${o.receipt_code || '---'}</td><td class="text-center text-sm">\${o.payment_method === 'card' ? '<span class="text-blue-400">KART</span>' : '<span class="text-green-400">NAĞD</span>'}</td><td class="text-center text-gray-400">\${o.items_count}</td><td class="text-right font-bold text-green-400">+\${formatMoney(o.grand_total)}</td></tr>\`;
-                });
+            // Satışlar
+            if(p.latest_orders) {
+                document.getElementById('table-orders').innerHTML = p.latest_orders.map(o => \`<tr><td class="text-gray-400">\${o.time}</td><td class="text-white">#\${o.receipt_code}</td><td class="text-green-400 font-bold">\${o.grand_total} ₼</td><td class="text-purple-400">\${o.promo_code || '-'}</td></tr>\`).join('');
             }
-
-            // 2. MƏHSULLAR
-            if (payload.products) {
-                const tbody = document.getElementById('tbody-products');
-                if(payload.products.length > 0) tbody.innerHTML = '';
-                payload.products.forEach(p => {
-                    tbody.innerHTML += \`<tr><td class="font-medium text-white">\${p.name}</td><td class="font-mono text-gray-400">\${p.barcode}</td><td class="text-center font-bold \${p.quantity < 5 ? 'text-red-500' : 'text-blue-400'}">\${p.quantity}</td><td class="text-right text-gray-500">\${formatMoney(p.cost_price)}</td><td class="text-right font-bold text-white">\${formatMoney(p.selling_price)}</td><td class="text-center">\${p.is_active ? '<span class="text-green-500 text-xs">●</span>' : '<span class="text-red-500 text-xs">●</span>'}</td></tr>\`;
-                });
+            // Partnyorlar
+            if(p.partners) {
+                document.getElementById('table-partners').innerHTML = p.partners.map(x => \`<tr><td class="font-bold text-white">\${x.name}</td><td class="text-gray-400">\${x.phone}</td><td class="font-mono text-blue-300">\${x.telegram_chat_id || '-'}</td><td class="text-green-400 font-bold">\${x.balance} ₼</td></tr>\`).join('');
             }
-
-            // 3. ANBAR & PARTİYALAR
-            setVal('w-cost', formatMoney(s.warehouse_cost));
-            setVal('w-sale', formatMoney(s.warehouse_sale));
-
-            if (payload.batches && payload.batches.length > 0) {
-                const tbody = document.getElementById('tbody-batches');
-                tbody.innerHTML = '';
-                payload.batches.forEach(b => {
-                    tbody.innerHTML += \`<tr><td class="text-white">\${b.product_name}</td><td class="font-mono text-yellow-500">\${b.batch_code}</td><td class="text-center font-bold text-white">\${b.current_quantity}</td><td class="text-right text-gray-400">\${formatMoney(b.cost_price)}</td><td class="text-right text-orange-400">\${formatMoney(b.current_quantity * b.cost_price)}</td><td class="text-xs text-gray-500">\${b.created_at}</td></tr>\`;
-                });
-            }
-
-            // 4. LOTEREYA
-            if (payload.lottery_orders && payload.lottery_orders.length > 0) {
-                const tbody = document.getElementById('tbody-lottery');
-                tbody.innerHTML = '';
-                payload.lottery_orders.forEach(o => {
-                    tbody.innerHTML += \`<tr><td class="text-gray-400">\${o.time}</td><td class="text-white">#\${o.receipt_code}</td><td class="text-yellow-400 font-mono font-bold text-lg">\${o.lottery_code}</td><td class="text-right text-green-400">\${formatMoney(o.grand_total)}</td></tr>\`;
-                });
-            }
-
-            // 5. PROMOKODLAR
-            if (payload.promocodes) {
-                const tbody = document.getElementById('tbody-promos');
-                if (payload.promocodes.length > 0) tbody.innerHTML = '';
-                payload.promocodes.forEach(pr => {
-                    tbody.innerHTML += \`<tr><td class="font-bold font-mono text-purple-400">\${pr.code}</td><td>\${pr.discount_type === 'percent' ? pr.discount_value + '%' : pr.discount_value + ' AZN'}</td><td class="text-center text-white">\${pr.orders_count}</td><td class="text-center text-green-500">Aktiv</td></tr>\`;
-                });
-            }
+            // Məhsullar
+            if(p.products) document.getElementById('table-products').innerHTML = p.products.map(x => \`<tr><td class="text-white">\${x.name}</td><td class="text-gray-400">\${x.barcode}</td><td class="text-center text-blue-400 font-bold">\${x.quantity}</td><td class="text-right text-gray-300">\${x.selling_price}</td></tr>\`).join('');
+            // Anbar
+            if(p.batches) document.getElementById('tbody-batches').innerHTML = p.batches.map(x => \`<tr><td class="text-white">\${x.product_name}</td><td class="text-yellow-500">\${x.batch_code}</td><td class="text-center text-white">\${x.current_quantity}</td><td class="text-right text-gray-400">\${x.cost_price}</td></tr>\`).join('');
+            // Lotereya
+            if(p.lottery_orders) document.getElementById('tbody-lottery').innerHTML = p.lottery_orders.map(x => \`<tr><td class="text-white">#\${x.receipt_code}</td><td class="text-yellow-400 font-bold">\${x.lottery_code}</td><td class="text-right text-green-400">\${x.grand_total}</td></tr>\`).join('');
+            // Promokod
+            if(p.promocodes) document.getElementById('table-promos').innerHTML = p.promocodes.map(x => \`<tr><td class="text-purple-400 font-bold">\${x.code}</td><td class="text-white">\${x.discount_value}</td><td class="text-center text-white">\${x.orders_count}</td><td class="text-center text-green-500">Aktiv</td></tr>\`).join('');
         }
-
-        function filterTable(tbodyId, text) {
-            const filter = text.toUpperCase();
-            const rows = document.getElementById(tbodyId).getElementsByTagName("tr");
-            for (let i = 0; i < rows.length; i++) {
-                const cells = rows[i].getElementsByTagName("td");
-                let match = false;
-                if (cells.length > 0) {
-                    if (cells[0].innerText.toUpperCase().indexOf(filter) > -1 || cells[1].innerText.toUpperCase().indexOf(filter) > -1) match = true;
-                }
-                rows[i].style.display = match ? "" : "none";
-            }
-        }
-        function setVal(id, val) { const el = document.getElementById(id); if(el) el.innerText = val; }
-        function formatMoney(amount) { return parseFloat(amount || 0).toFixed(2) + ' ₼'; }
     </script>
 </body>
 </html>
 `;
 
-// Routes
+// ==========================================
+// ROUTES
+// ==========================================
 app.get('/', (req, res) => {
-    if (req.session.authenticated) { res.send(dashboardHTML); } else { res.send(loginHTML); }
+    if (req.session.authenticated) return res.send(dashboardHTML);
+    res.send(loginHTML);
 });
 
 app.post('/login', (req, res) => {
-    const { username, password } = req.body;
-    if (username === ADMIN_USER && password === ADMIN_PASS) {
+    if (req.body.username === ADMIN_USER && req.body.password === ADMIN_PASS) {
         req.session.authenticated = true;
         res.redirect('./');
     } else {
@@ -350,8 +310,20 @@ app.get('/logout', (req, res) => { req.session.destroy(); res.redirect('./'); })
 app.post('/api/report', (req, res) => {
     try {
         const data = req.body;
-        console.log(`📡 Data: ${data.type}`);
-        currentData = data;
+        const payload = data.payload;
+        currentPayload = payload; // Yaddaşda saxla
+
+        // Telegram Bildiriş (Satış zamanı)
+        if (payload.latest_orders && payload.latest_orders.length > 0 && bot) {
+            const lastOrder = payload.latest_orders[0];
+            
+            // Yalnız YENİ satışdırsa və PROMOKOD varsa
+            if (lastOrder.receipt_code !== lastProcessedOrderCode && lastOrder.promo_code) {
+                lastProcessedOrderCode = lastOrder.receipt_code;
+                notifyPartnerAboutSale(lastOrder, payload.promocodes, payload.partners);
+            }
+        }
+
         io.emit('live_update', data);
         res.json({ status: true });
     } catch (e) {
@@ -360,10 +332,7 @@ app.post('/api/report', (req, res) => {
 });
 
 io.on('connection', (socket) => {
-    if(currentData) socket.emit('live_update', currentData);
-    socket.on('request_last_data', () => { if(currentData) socket.emit('live_update', currentData); });
+    if (currentPayload) socket.emit('live_update', { type: 'full_report', payload: currentPayload });
 });
 
-server.listen(3000, () => {
-    console.log(`🚀 Monitorinq Serveri İşləyir`);
-});
+server.listen(3000, () => console.log('Monitor 3000'));

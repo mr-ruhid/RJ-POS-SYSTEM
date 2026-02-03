@@ -1,0 +1,173 @@
+require('dotenv').config();
+
+const express = require('express');
+const http = require('http');
+const { Server } = require("socket.io");
+const bodyParser = require('body-parser');
+const cors = require('cors');
+const session = require('express-session');
+const path = require('path');
+const TelegramBot = require('node-telegram-bot-api');
+const fs = require('fs');
+
+// --- TƏNZİMLƏMƏLƏR ---
+const ADMIN_USER = process.env.ADMIN_USER || "admin";
+const ADMIN_PASS = process.env.ADMIN_PASS || "admin123";
+const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN; // .env-dən oxuyur
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: "*" } });
+
+app.set('trust proxy', 1); // Nginx üçün
+app.use(cors());
+app.use(bodyParser.json({ limit: '50mb' }));
+app.use(bodyParser.urlencoded({ limit: '50mb', extended: true }));
+
+app.use(session({
+    secret: process.env.SESSION_SECRET || 'gizli_açar_rj_pos_secure',
+    resave: false,
+    saveUninitialized: true,
+    cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 } // 24 saat
+}));
+
+// --- YADDAŞ (DATABASE ƏVƏZİ) ---
+const DATA_FILE = 'server_data.json';
+let localData = {
+    partners: {}, // { partner_id: chat_id }
+    last_processed_order: null // Son işlənən sifariş
+};
+
+// Yaddaşı yüklə
+if (fs.existsSync(DATA_FILE)) {
+    try {
+        localData = JSON.parse(fs.readFileSync(DATA_FILE));
+        if (!localData.partners) localData.partners = {};
+    } catch (e) { console.error("Data oxuma xətası:", e); }
+}
+
+function saveData() {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(localData, null, 2));
+}
+
+// --- TELEGRAM BOT ---
+let bot = null;
+if (TELEGRAM_TOKEN) {
+    bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
+    console.log("🤖 Telegram Bot Aktivdir");
+
+    // /start əmri
+    bot.onText(/\/start/, (msg) => {
+        const chatId = msg.chat.id;
+        const name = msg.from.first_name;
+        bot.sendMessage(chatId, `Salam, ${name}! 👋\nSizin Telegram ID: \`${chatId}\`\n\nBu kodu Adminə təqdim edin ki, hesabınızla əlaqələndirilsin.`, { parse_mode: 'Markdown' });
+    });
+
+    // Hesabat düymələri (Gələcəkdə genişləndirilə bilər)
+    bot.on('message', (msg) => {
+        if (msg.text === '/report') {
+            bot.sendMessage(msg.chat.id, "📊 Hesabat sisteminiz aktivdir. Satış olduqda bildiriş alacaqsınız.");
+        }
+    });
+} else {
+    console.log("⚠️ Xəbərdarlıq: TELEGRAM_BOT_TOKEN tapılmadı (.env)");
+}
+
+// --- ROUTES ---
+
+// 1. Giriş
+app.get('/', (req, res) => {
+    if (req.session.authenticated) {
+        // Əgər giriş edilibsə, dashboard faylını göndər
+        return res.sendFile(path.join(__dirname, 'views', 'dashboard.html'));
+    }
+    // Giriş edilməyibsə, login faylını göndər
+    res.sendFile(path.join(__dirname, 'views', 'login.html'));
+});
+
+// 2. Login Post
+app.post('/login', (req, res) => {
+    const { username, password } = req.body;
+    if (username === ADMIN_USER && password === ADMIN_PASS) {
+        req.session.authenticated = true;
+        res.redirect('/');
+    } else {
+        res.redirect('/?error=1');
+    }
+});
+
+// 3. Çıxış
+app.get('/logout', (req, res) => {
+    req.session.destroy();
+    res.redirect('/');
+});
+
+// 4. API (Mağazadan Məlumat Qəbulu)
+app.post('/api/report', (req, res) => {
+    try {
+        const data = req.body;
+        const payload = data.payload;
+
+        // A. Partnyorları yoxlayıb birləşdiririk
+        if (payload.partners && Array.isArray(payload.partners)) {
+            payload.partners = payload.partners.map(p => {
+                if (localData.partners[p.id]) {
+                    p.telegram_chat_id = localData.partners[p.id];
+                }
+                return p;
+            });
+        }
+
+        // B. Satış Bildirişi (Telegram)
+        if (payload.latest_orders && payload.latest_orders.length > 0 && bot) {
+            const lastOrder = payload.latest_orders[0]; // Ən son satış
+            
+            if (lastOrder.receipt_code !== localData.last_processed_order) {
+                localData.last_processed_order = lastOrder.receipt_code;
+                saveData(); // Son satışı yadda saxla
+
+                // Burada gələcəkdə promokod sahibinə mesaj göndərmə məntiqi qurulacaq
+            }
+        }
+
+        // C. Canlı Ekrana ötür
+        io.emit('live_update', { 
+            type: 'full_report', 
+            payload: payload, 
+            time: new Date().toLocaleTimeString() 
+        });
+        
+        res.json({ status: true });
+
+    } catch (e) {
+        console.error(e);
+        res.status(500).json({ status: false, error: e.message });
+    }
+});
+
+// Socket.IO - Admin Paneldən gələn əmrlər
+io.on('connection', (socket) => {
+    
+    // Admin Telegram ID təyin edəndə
+    socket.on('update_partner_telegram', (data) => {
+        if (data.id && data.telegram_chat_id) {
+            localData.partners[data.id] = data.telegram_chat_id;
+            saveData();
+            
+            // Bot vasitəsilə partnyora xəbər veririk
+            if (bot) {
+                bot.sendMessage(data.telegram_chat_id, "✅ Sizin hesabınız təsdiqləndi! Artıq satış bildirişlərini buradan alacaqsınız.")
+                   .catch(e => console.error("Telegram göndərmə xətası:", e.message));
+            }
+        }
+    });
+
+    socket.on('request_last_data', () => {
+        // Yeni qoşulana mövcud datanı göndərmək olar (əgər yaddaşda saxlasaq)
+    });
+});
+
+const PORT = 3000;
+server.listen(PORT, () => {
+    console.log(`🚀 Server İşləyir: Port ${PORT}`);
+});

@@ -1,0 +1,10 @@
+To connect to the Telegram API
+
+1. Log in via SSH and type nano .env
+2. Add the following here:
+
+TELEGRAM_BOT_TOKEN=your_token
+
+3. CTRL + X
+4. Y
+5. ENTER
