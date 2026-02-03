@@ -17,7 +17,11 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+const io = new Server(server, { 
+    cors: { origin: "*" },
+    // Socket.io yolunu standart saxlayırıq, Nginx bunu yönləndirəcək
+    path: '/socket.io'
+});
 
 app.set('trust proxy', 1);
 app.use(cors());
@@ -34,7 +38,6 @@ app.use(session({
 // --- YADDAŞ ---
 const DATA_FILE = 'server_data.json';
 let localData = {
-    // DÜZƏLİŞ: partners artıq Obyekt (Dictionary) kimi saxlanılır: { "partner_id": "chat_id" }
     partners: {}, 
     pending_partners: [], 
     last_processed_order: null
@@ -44,7 +47,6 @@ if (fs.existsSync(DATA_FILE)) {
     try {
         const raw = JSON.parse(fs.readFileSync(DATA_FILE));
         localData = { ...localData, ...raw };
-        // Əgər köhnə versiyadan qalıbsa və Array-dirsə, Obyektə çevir
         if (Array.isArray(localData.partners)) localData.partners = {};
         if (!Array.isArray(localData.pending_partners)) localData.pending_partners = [];
     } catch (e) { console.error("Data oxuma xətası:", e); }
@@ -65,7 +67,6 @@ if (TELEGRAM_TOKEN) {
             const chatId = msg.chat.id;
             const name = msg.from.first_name;
             
-            // Yaddaşda bu ID varmı? (Object.values ilə yoxlayırıq)
             const isLinked = Object.values(localData.partners).includes(chatId.toString()) || Object.values(localData.partners).includes(chatId);
             
             if(isLinked) {
@@ -99,7 +100,6 @@ if (TELEGRAM_TOKEN) {
 
             if (data === 'confirm_reg') {
                 const pendingExists = localData.pending_partners.find(p => p.chat_id == chatId);
-                // Artıq mövcud olanları təkrar əlavə etmə
                 const isLinked = Object.values(localData.partners).includes(chatId.toString());
 
                 if (!pendingExists && !isLinked) {
@@ -111,24 +111,20 @@ if (TELEGRAM_TOKEN) {
                     };
                     localData.pending_partners.push(newPending);
                     saveData();
-                    
-                    // Adminə xəbər ver
                     io.emit('new_telegram_request', newPending);
                     io.emit('pending_partners_list', localData.pending_partners);
                 }
 
-                bot.editMessageText(`✅ Sorğunuz qəbul edildi!\n\n🆔 ID: \`${chatId}\`\n\nAdmin təsdiqlədikdən sonra satış bildirişləri gələcək.`, {
+                bot.editMessageText(`✅ Sorğunuz qəbul edildi!\n\n🆔 ID: \`${chatId}\`\n\nAdmin təsdiqini gözləyin.`, {
                     chat_id: chatId,
                     message_id: msgId,
                     parse_mode: 'Markdown'
                 });
-
             } else if (data === 'cancel_reg') {
                 bot.editMessageText("❌ İmtina edildi.", { chat_id: chatId, message_id: msgId });
             }
         });
 
-        // Menyu Düymələri
         bot.on('message', (msg) => {
             const chatId = msg.chat.id;
             const text = msg.text;
@@ -140,48 +136,17 @@ if (TELEGRAM_TOKEN) {
     } catch (error) { console.error("Bot xətası:", error.message); }
 }
 
-// --- TELEGRAM BİLDİRİŞ FUNKSİYASI ---
 function notifyPartnerAboutSale(order, promocodes, partnersListFromPayload) {
     if (!bot || !order.promo_code) return;
-
-    console.log(`📨 Telegram: Satış var! Kod: ${order.promo_code}`);
-
-    // Promokodu tapırıq
     const promo = promocodes.find(p => p.code === order.promo_code);
-    
-    if (!promo) {
-        console.log("❌ Telegram: Promokod tapılmadı.");
-        return;
-    }
-
-    // Partnyoru tapırıq
-    // DİQQƏT: ID-ləri sətir/rəqəm fərqinə görə '==' ilə yoxlayırıq
+    if (!promo) return;
     const partner = partnersListFromPayload.find(p => p.id == promo.partner_id);
-
-    if (!partner) {
-        console.log(`❌ Telegram: Partnyor tapılmadı (ID: ${promo.partner_id})`);
-        return;
-    }
-
-    // Telegram ID-ni Server Yaddaşından götürürük
+    if (!partner) return;
     const telegramChatId = localData.partners[partner.id];
 
     if (telegramChatId) {
-        const msg = `
-🎉 **Yeni Satış!**
-    
-🎫 Kod: *${order.promo_code}*
-💵 Məbləğ: ${order.grand_total} ₼
-⏰ Saat: ${order.time || new Date().toLocaleTimeString()}
-
-💰 Cari Balans: *${partner.balance} ₼*
-        `;
-        
-        bot.sendMessage(telegramChatId, msg, { parse_mode: 'Markdown' })
-           .then(() => console.log(`✅ Mesaj göndərildi: ${partner.name}`))
-           .catch(err => console.error(`❌ Mesaj xətası: ${err.message}`));
-    } else {
-        console.log(`⚠️ Telegram: Partnyorun (${partner.name}) Telegram ID-si yoxdur.`);
+        const msg = `🎉 **Yeni Satış!**\n🎫 Kod: *${order.promo_code}*\n💵 Məbləğ: ${order.grand_total} ₼\n⏰ Saat: ${order.time || new Date().toLocaleTimeString()}\n💰 Cari Balans: *${partner.balance} ₼*`;
+        bot.sendMessage(telegramChatId, msg, { parse_mode: 'Markdown' }).catch(err => console.error(err));
     }
 }
 
@@ -210,6 +175,7 @@ const loginHTML = `
 </html>
 `;
 
+// [VACİB DÜZƏLİŞLƏR]: socket.io yolu və bağlantı ayarları
 const dashboardHTML = `
 <!DOCTYPE html>
 <html lang="az">
@@ -217,7 +183,8 @@ const dashboardHTML = `
     <meta charset="UTF-8">
     <title>Monitor</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="socket.io/socket.io.js"></script>
+    <!-- [DÜZƏLİŞ] Yol mütləq (absolute) olmalıdır ki, Nginx tutsun -->
+    <script src="/socket.io/socket.io.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         body { background-color: #0f172a; color: #e2e8f0; font-family: sans-serif; overflow: hidden; }
@@ -230,8 +197,6 @@ const dashboardHTML = `
         th { text-align: left; padding: 12px; background: #253042; color: #94a3b8; position: sticky; top: 0; }
         td { padding: 12px; border-bottom: 1px solid #334155; color: #cbd5e1; }
         .hidden-page { display: none; }
-        .modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); display: flex; justify-content: center; align-items: center; z-index: 1000; }
-        .hidden-modal { display: none; }
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
     </style>
@@ -277,21 +242,20 @@ const dashboardHTML = `
             <div class="stat-card"><table class="w-full"><thead><tr><th>Ad</th><th>Telefon</th><th>Telegram ID</th><th>Balans</th></tr></thead><tbody id="table-partners"><tr><td colspan="5" class="text-center py-4 text-gray-500">Mağazadan məlumat gəlməyib</td></tr></tbody></table></div>
         </div>
         
-        <!-- MƏHSULLAR -->
+        <!-- DIGER SƏHİFƏLƏR -->
         <div id="page-products" class="hidden-page"><h2 class="text-2xl font-bold text-white mb-6">Məhsullar</h2><div class="stat-card overflow-y-auto max-h-[700px]"><table class="w-full"><thead><tr><th>Ad</th><th>Barkod</th><th class="text-center">Stok</th><th class="text-right">Qiymət</th></tr></thead><tbody id="table-products"></tbody></table></div></div>
-        
-        <!-- ANBAR (BATCHES FALLBACK) -->
         <div id="page-warehouse" class="hidden-page"><h2 class="text-2xl font-bold text-white mb-6">Anbar</h2><div class="stat-card overflow-y-auto max-h-[700px]"><table class="w-full"><thead><tr><th>Məhsul</th><th>Kod</th><th class="text-center">Say</th><th class="text-right">Maya</th></tr></thead><tbody id="tbody-batches"></tbody></table></div></div>
-        
-        <!-- LOTEREYA (FALLBACK) -->
-        <div id="page-lottery" class="hidden-page"><h2 class="text-2xl font-bold text-white mb-6">Lotereya Kodları</h2><div class="stat-card"><table class="w-full"><thead><tr><th>Qəbz</th><th>Tarix</th><th>Lotereya Kodu</th><th class="text-right">Məbləğ</th></tr></thead><tbody id="tbody-lottery"></tbody></table></div></div>
-        
-        <!-- PROMOKODLAR -->
+        <div id="page-lottery" class="hidden-page"><h2 class="text-2xl font-bold text-white mb-6">Lotereya</h2><div class="stat-card"><table class="w-full"><thead><tr><th>Qəbz</th><th>Tarix</th><th>Lotereya Kodu</th><th class="text-right">Məbləğ</th></tr></thead><tbody id="tbody-lottery"></tbody></table></div></div>
         <div id="page-promocodes" class="hidden-page"><h2 class="text-2xl font-bold text-white mb-6">Promokodlar</h2><div class="stat-card"><table class="w-full"><thead><tr><th>Kod</th><th>Endirim</th><th class="text-center">İstifadə</th><th class="text-center">Status</th></tr></thead><tbody id="table-promos"></tbody></table></div></div>
     </div>
 
     <script>
-        const socket = io();
+        // [DÜZƏLİŞ] Socket bağlantısı mütləq şəkildə konfiqurasiya edilir
+        const socket = io({
+            path: '/socket.io', // Nginx-in istiqamətləndirdiyi yol
+            transports: ['websocket', 'polling'] // Sabit əlaqə üçün
+        });
+
         let currentPayload = null;
 
         function switchPage(id, el) {
@@ -302,20 +266,20 @@ const dashboardHTML = `
         }
 
         socket.on('connect', () => { 
-            document.getElementById('status').innerText = 'Online (Yaşıl)'; 
+            document.getElementById('status').innerHTML = '<span class="text-green-500 font-bold">Online (Yaşıl)</span>'; 
             socket.emit('request_last_data');
             socket.emit('request_pending_partners');
         });
         
-        socket.on('disconnect', () => { document.getElementById('status').innerText = 'Offline (Qırmızı)'; });
+        socket.on('connect_error', (err) => {
+            console.error("Socket Xətası:", err);
+            document.getElementById('status').innerHTML = '<span class="text-red-500">Qoşulma Xətası</span>';
+        });
 
-        socket.on('live_update', (data) => { if (data.type === 'full_report') renderData(data.payload); });
-        
-        // Gözləyən siyahısı üçün (Modalda)
-        socket.on('pending_partners_list', (list) => {
-            // Serverdən gələn siyahı - burada istifadə etmirik, çünki Dashboard sadəcə monitorinqdir
-            // Amma konsola yazırıq ki, əlaqəni görək
-            console.log("Pending Partners:", list);
+        socket.on('disconnect', () => { document.getElementById('status').innerHTML = '<span class="text-red-500">Offline (Qırmızı)</span>'; });
+
+        socket.on('live_update', (data) => { 
+            if (data.type === 'full_report') renderData(data.payload); 
         });
 
         function renderData(p) {
@@ -330,26 +294,13 @@ const dashboardHTML = `
                 const tbody = document.getElementById('table-orders');
                 tbody.innerHTML = p.latest_orders.map(o => \`<tr><td class="text-gray-400">\${o.time}</td><td class="text-white">#\${o.receipt_code}</td><td class="text-green-400 font-bold">\${formatMoney(o.grand_total)}</td><td class="text-purple-400">\${o.promo_code || '-'}</td></tr>\`).join('');
             }
-
             if (p.partners) {
                 const tbody = document.getElementById('table-partners');
                 tbody.innerHTML = p.partners.map(x => \`<tr><td class="font-bold text-white">\${x.name}</td><td class="text-gray-400">\${x.phone}</td><td class="font-mono text-blue-300">\${x.telegram_chat_id || '-'}</td><td class="text-green-400 font-bold">\${formatMoney(x.balance)}</td></tr>\`).join('');
             }
-            
             if (p.products) document.getElementById('table-products').innerHTML = p.products.map(x => \`<tr><td class="text-white">\${x.name}</td><td class="text-gray-400">\${x.barcode}</td><td class="text-center text-blue-400 font-bold">\${x.quantity}</td><td class="text-right text-gray-300">\${formatMoney(x.selling_price)}</td></tr>\`).join('');
-            
-            // Anbar (Batch yoxdursa Product istifadə et)
-            const warehouseData = p.batches || p.products; 
-            if (warehouseData) {
-                document.getElementById('tbody-batches').innerHTML = warehouseData.map(x => \`<tr><td class="text-white">\${x.product_name || x.name}</td><td class="text-yellow-500 font-mono">\${x.batch_code || x.barcode}</td><td class="text-center text-white">\${x.current_quantity || x.quantity}</td><td class="text-right text-gray-400">\${formatMoney(x.cost_price)}</td></tr>\`).join('');
-            }
-
-            // Lotereya (Lottery order yoxdursa latest_orders istifadə et)
-            const lotteryData = p.lottery_orders || p.latest_orders.filter(o => o.lottery_code); // Filterləyirik
-            if (lotteryData.length > 0) {
-                 document.getElementById('tbody-lottery').innerHTML = lotteryData.map(x => \`<tr><td class="text-white">#\${x.receipt_code}</td><td class="text-gray-400">\${x.time}</td><td class="text-yellow-400 font-bold font-mono text-lg">\${x.lottery_code || '-'}</td><td class="text-right text-green-400">\${formatMoney(x.grand_total)}</td></tr>\`).join('');
-            }
-
+            if (p.batches) document.getElementById('tbody-batches').innerHTML = p.batches.map(x => \`<tr><td class="text-white">\${x.product_name}</td><td class="text-yellow-500">\${x.batch_code}</td><td class="text-center text-white">\${x.current_quantity}</td><td class="text-right text-gray-400">\${formatMoney(x.cost_price)}</td></tr>\`).join('');
+            if (p.lottery_orders) document.getElementById('tbody-lottery').innerHTML = p.lottery_orders.map(x => \`<tr><td class="text-white">#\${x.receipt_code}</td><td class="text-gray-400">\${x.time}</td><td class="text-yellow-400 font-bold font-mono text-lg">\${x.lottery_code || '-'}</td><td class="text-right text-green-400">\${formatMoney(x.grand_total)}</td></tr>\`).join('');
             if (p.promocodes) document.getElementById('table-promos').innerHTML = p.promocodes.map(x => \`<tr><td class="text-purple-400 font-bold">\${x.code}</td><td class="text-white">\${x.discount_value}</td><td class="text-center text-white">\${x.orders_count}</td><td class="text-center text-green-500">Aktiv</td></tr>\`).join('');
         }
 
@@ -386,33 +337,34 @@ app.post('/api/report', (req, res) => {
     try {
         const payload = req.body.payload;
         
-        // 1. Partnyorları yaddaşa yaz (ID Map üçün)
+        // Partnyorları yaddaşa yaz
         if (payload.partners && Array.isArray(payload.partners)) {
             // Yaddaşdakı datanı yeniləyirik, amma mövcud ID-ləri qoruyuruq
-            // Əgər mağaza partnyorun Telegram ID-sini göndərirsə, onu əsas götürürük
             payload.partners.forEach(p => {
                 if (p.telegram_chat_id) {
                     localData.partners[p.id] = p.telegram_chat_id;
                 }
             });
 
-            // Gözləyən siyahısından təmizləyirik (artıq sistemdə varsa)
+            // Artıq rəsmi siyahıda olanları gözləyən siyahısından sil
             const activeIds = Object.values(localData.partners);
             localData.pending_partners = localData.pending_partners.filter(u => !activeIds.includes(u.chat_id.toString()));
             
             saveData();
         }
 
-        // 2. Satış Bildirişi (Telegram)
+        // Telegram Bildiriş
         if (payload.latest_orders && payload.latest_orders.length > 0 && bot) {
             const lastOrder = payload.latest_orders[0];
-            // Yalnız yeni satış və promokod varsa
             if (lastOrder.receipt_code !== localData.last_processed_order && lastOrder.promo_code) {
                 localData.last_processed_order = lastOrder.receipt_code;
                 saveData();
                 notifyPartnerAboutSale(lastOrder, payload.promocodes, payload.partners);
             }
         }
+        
+        // Son gələn paketi yaddaşda saxla ki, yeni qoşulanlar görsün
+        currentPayload = payload;
 
         io.emit('live_update', { type: 'full_report', payload: payload, time: new Date().toLocaleTimeString() });
         res.json({ status: true });
