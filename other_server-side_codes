@@ -1,0 +1,3 @@
+If you've edited the code on the server, be sure to use it:
+
+pm2 restart monitor
