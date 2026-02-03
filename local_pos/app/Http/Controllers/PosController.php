@@ -21,16 +21,54 @@ class PosController extends Controller
     // 1. POS Ekranını açır
     public function index()
     {
-        $products = Product::where('is_active', true)
+        $productsRaw = Product::where('is_active', true)
             ->with(['activeDiscount', 'batches' => function($q) {
                 $q->where('location', 'store')->where('current_quantity', '>', 0);
             }])
             ->latest()
-            ->get()
-            ->map(function($product) {
-                $product->store_stock = $product->batches->sum('current_quantity');
-                return $product;
-            });
+            ->get();
+
+        // Məhsulları frontend-in başa düşəcəyi formata salırıq (Search metodundakı kimi)
+        $products = $productsRaw->map(function($product) {
+            $stock = $product->batches->sum('current_quantity');
+            $price = (float) $product->selling_price;
+            $discountAmount = 0;
+
+            // Vergi dərəcəsi
+            $taxRate = 0;
+            $firstBatch = $product->batches->first();
+            if ($firstBatch && $firstBatch->batch_code) {
+                if (preg_match('/\((\d+(?:\.\d+)?)%\)/', $firstBatch->batch_code, $matches)) {
+                    $taxRate = (float) $matches[1];
+                }
+            }
+
+            // Endirim
+            if ($product->activeDiscount) {
+                $discount = $product->activeDiscount;
+                if ($discount->type == 'fixed') {
+                    $discountAmount = $discount->value;
+                } else {
+                    $discountAmount = ($price * $discount->value / 100);
+                }
+            }
+
+            $finalPrice = max(0, $price - $discountAmount);
+
+            return [
+                'id' => $product->id,
+                'name' => $product->name,
+                'barcode' => $product->barcode,
+                'image' => $product->image ? asset('storage/' . $product->image) : null,
+                'price' => $price,
+                'discount_amount' => (float) $discountAmount,
+                'final_price' => (float) $finalPrice,
+                'tax_rate' => $taxRate,
+                'stock' => (int) $stock,
+                // Orijinal obyekti də saxlayırıq
+                'original' => $product
+            ];
+        });
 
         return view('admin.pos.index', compact('products'));
     }

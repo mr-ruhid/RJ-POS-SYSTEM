@@ -4,66 +4,41 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\SoftDeletes;
-use Illuminate\Database\Eloquent\Concerns\HasUuids;
 
 class Product extends Model
 {
-    use HasFactory, SoftDeletes, HasUuids;
+    use HasFactory;
 
-    protected $fillable = [
-        'name',
-        'barcode',
-        'description',
-        'category_id',
-        'image',
-        'cost_price',
-        'selling_price',
-        'tax_rate',
-        'alert_limit', // Kritik stok limiti
-        'is_active',
-        'last_synced_at'
-    ];
+    public $incrementing = false; // UUID üçün
+    protected $keyType = 'string';
 
-    protected $casts = [
-        'is_active' => 'boolean',
-        'cost_price' => 'decimal:2',
-        'selling_price' => 'decimal:2',
-        'tax_rate' => 'decimal:2',
-        'alert_limit' => 'integer',
-    ];
+    protected $guarded = [];
 
-    // Məhsulun Kateqoriyası
     public function category()
     {
         return $this->belongsTo(Category::class);
     }
 
-    // Partiyalar (Batches)
     public function batches()
     {
         return $this->hasMany(ProductBatch::class);
     }
 
-    // YENİ: Aktiv Endirim (Yalnız 1 dənə və tarixi keçərli olan)
-    public function activeDiscount()
-    {
-        return $this->hasOne(ProductDiscount::class)
-                    ->where('is_active', true)
-                    ->where('start_date', '<=', now())
-                    ->where('end_date', '>=', now())
-                    ->latest();
-    }
-
-    // YENİ: Bütün endirim tarixçəsi
     public function discounts()
     {
         return $this->hasMany(ProductDiscount::class);
     }
 
-    // Köməkçi: Ümumi Stoku Hesablamaq
-    public function getTotalStockAttribute()
+    /**
+     * Aktiv Endirimi Gətirən Funksiya
+     * Yalnız tarixi keçməyən və is_active=1 olan endirimi gətirir.
+     */
+    public function activeDiscount()
     {
-        return $this->batches()->sum('current_quantity');
+        return $this->hasOne(ProductDiscount::class)
+            ->where('is_active', true)
+            ->where('start_date', '<=', now())
+            ->where('end_date', '>=', now())
+            ->latest();
     }
 }

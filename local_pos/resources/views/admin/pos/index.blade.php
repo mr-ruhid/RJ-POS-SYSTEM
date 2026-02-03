@@ -4,13 +4,14 @@
 <div class="h-[calc(100vh-120px)] flex flex-col md:flex-row gap-4"
      x-data="{
         searchQuery: '',
-        products: [],
+        products: {{ Js::from($products) }}, // Controller-dən gələn hazır data
         cart: [],
         isLoading: false,
         isProcessing: false,
         showCheckoutModal: false,
         promoCode: '',
-        promoDiscountAmount: 0, // Promokod endirimi üçün dəyişən
+        promoDiscountAmount: 0,
+        promoMessage: '', // Mesajı göstərmək üçün (alert əvəzinə)
 
         init() {
             this.$nextTick(() => {
@@ -25,11 +26,14 @@
             try {
                 const response = await fetch(`{{ route('pos.search') }}?query=${this.searchQuery}`);
                 const data = await response.json();
+                // Axtarış nəticəsi gələndə products siyahısını yeniləyirik
+                // Əgər axtarış boşdursa, ilkin siyahını qaytarmaq olar (istəyə bağlı)
                 this.products = data;
 
                 if (this.products.length === 1 && this.products[0].barcode === this.searchQuery) {
                     this.addToCart(this.products[0]);
                     this.searchQuery = '';
+                    // Axtarışdan sonra siyahını təmizləmirik ki, kassir görsün, və ya təmizləyə bilərik
                     this.products = [];
                 }
             } catch (error) {
@@ -53,14 +57,20 @@
                     alert('Maksimum stok sayına çatdınız!');
                 }
             } else {
+                // Controller-dən gələn datada discount_amount və final_price mütləq olmalıdır
                 this.cart.push({
                     ...product,
                     qty: 1,
-                    is_gift: false
+                    is_gift: false,
+                    // Əgər nədənsə gəlməyibsə default dəyərlər
+                    price: Number(product.price),
+                    discount_amount: Number(product.discount_amount || 0),
+                    final_price: Number(product.final_price || product.price)
                 });
             }
-            // Məhsul əlavə olunanda promokodu sıfırlayırıq ki, yenidən yoxlansın (məbləğ dəyişib)
+            // Promokodu sıfırlamırıq, sadəcə yenidən hesablaya bilərik, amma təhlükəsizlik üçün sıfırlamaq yaxşıdır
             this.promoDiscountAmount = 0;
+            this.promoMessage = '';
         },
 
         updateQty(index, amount) {
@@ -77,25 +87,26 @@
             } else {
                 this.removeFromCart(index);
             }
-            this.promoDiscountAmount = 0; // Məbləğ dəyişdiyi üçün reset
+            this.promoDiscountAmount = 0;
+            this.promoMessage = '';
         },
 
         removeFromCart(index) {
             this.cart.splice(index, 1);
             this.promoDiscountAmount = 0;
+            this.promoMessage = '';
         },
 
         toggleGift(index) {
             this.cart[index].is_gift = !this.cart[index].is_gift;
             this.promoDiscountAmount = 0;
+            this.promoMessage = '';
         },
 
-        // Promokodu Yoxlamaq (API Sorğusu)
+        // Promokodu Yoxlamaq (Alertsiz)
         async applyPromo() {
             if(!this.promoCode) return;
 
-            // Hazırki məbləğ (Məhsul endirimləri çıxılandan sonra)
-            // 'totals' getter-indən istifadə etmək üçün, sonsuz döngəyə girməmək şərti ilə sadəcə məhsulları hesablayırıq
             let currentTotal = 0;
             this.cart.forEach(item => {
                 if (!item.is_gift) {
@@ -104,25 +115,25 @@
             });
 
             if (currentTotal <= 0) {
-                alert('Səbət boşdur!');
+                this.promoMessage = 'Səbət boşdur!';
                 return;
             }
 
             try {
-                // Yeni yaratdığımız API-yə sorğu göndəririk
                 const response = await fetch(`{{ route('pos.check_promo') }}?code=${this.promoCode}&total=${currentTotal}`);
                 const data = await response.json();
 
                 if(data.valid) {
                     this.promoDiscountAmount = Number(data.discount_amount);
-                    alert(data.message);
+                    // Alert yoxdur, sadəcə inputun altında mesaj görünəcək (aşağıda HTML-də əlavə etdim)
+                    this.promoMessage = 'Endirim tətbiq edildi: -' + this.formatPrice(data.discount_amount);
                 } else {
                     this.promoDiscountAmount = 0;
-                    alert(data.message);
+                    this.promoMessage = data.message; // Xəta mesajı (məs: vaxtı bitib)
                 }
             } catch(e) {
                 console.error(e);
-                alert('Promokod yoxlanarkən xəta baş verdi');
+                this.promoDiscountAmount = 0;
             }
         },
 
@@ -133,12 +144,16 @@
 
             this.cart.forEach(item => {
                 if (!item.is_gift) {
-                    let itemTotal = Number(item.final_price) * item.qty;
-                    let itemDisc = Number(item.discount_amount) * item.qty;
+                    // Məhsulun ilkin qiyməti (Endirimsiz)
+                    let itemOriginalTotal = Number(item.price) * item.qty;
+                    // Məhsulun endirimli qiyməti
+                    let itemFinalTotal = Number(item.final_price) * item.qty;
+                    // Məhsul üzrə endirim məbləği
+                    let itemDisc = itemOriginalTotal - itemFinalTotal;
 
-                    subtotal += (Number(item.price) * item.qty);
+                    subtotal += itemOriginalTotal;
                     productDiscount += itemDisc;
-                    grandTotal += itemTotal;
+                    grandTotal += itemFinalTotal;
                 }
             });
 
@@ -150,7 +165,8 @@
                 subtotal,
                 // Cəmi endirim = Məhsul endirimləri + Promokod
                 discount: productDiscount + this.promoDiscountAmount,
-                grandTotal: finalTotal
+                grandTotal: finalTotal,
+                productDiscount: productDiscount // Sırf məhsul endirimi
             };
         },
 
@@ -183,10 +199,9 @@
                     window.open(printUrl, 'ReceiptPrint', 'width=400,height=600,toolbar=0,scrollbars=0,status=0');
 
                     this.cart = [];
-                    this.products = [];
-                    this.searchQuery = '';
                     this.promoCode = '';
                     this.promoDiscountAmount = 0;
+                    this.promoMessage = '';
                     this.showCheckoutModal = false;
 
                     this.$nextTick(() => {
@@ -250,7 +265,14 @@
 
                 <div x-show="!isLoading && products.length > 0" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                     <template x-for="product in products" :key="product.id">
-                        <div @click="addToCart(product)" class="bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md cursor-pointer transition transform hover:-translate-y-1 overflow-hidden flex flex-col h-full">
+                        <div @click="addToCart(product)" class="bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md cursor-pointer transition transform hover:-translate-y-1 overflow-hidden flex flex-col h-full relative">
+                            <!-- Endirim Etiketi -->
+                            <template x-if="product.discount_amount > 0">
+                                <div class="absolute top-2 right-2 bg-red-500 text-white text-xs font-bold px-2 py-1 rounded shadow z-10">
+                                    Endirim
+                                </div>
+                            </template>
+
                             <div class="h-32 bg-gray-200 flex items-center justify-center relative">
                                 <template x-if="product.image">
                                     <img :src="product.image" class="h-full w-full object-cover">
@@ -269,13 +291,14 @@
                                 </div>
                                 <div class="mt-2 flex justify-between items-end">
                                     <div>
+                                        <!-- Endirimli Qiymət Göstərilməsi -->
                                         <template x-if="product.discount_amount > 0">
-                                            <div class="flex flex-col">
+                                            <div class="flex flex-col leading-none">
                                                 <span class="text-xs text-gray-400 line-through" x-text="formatPrice(product.price)"></span>
                                                 <span class="text-sm font-bold text-red-600" x-text="formatPrice(product.final_price)"></span>
                                             </div>
                                         </template>
-                                        <template x-if="product.discount_amount <= 0">
+                                        <template x-if="!product.discount_amount || product.discount_amount <= 0">
                                             <span class="text-sm font-bold text-blue-600" x-text="formatPrice(product.price)"></span>
                                         </template>
                                     </div>
@@ -309,9 +332,16 @@
                             <div class="flex-1">
                                 <h4 class="text-sm font-bold text-gray-800" x-text="item.name"></h4>
                                 <div class="text-xs text-gray-500 mt-1 flex gap-2 items-center">
+                                    <!-- Endirim Göstəricisi Səbətdə -->
                                     <template x-if="!item.is_gift">
-                                        <span x-text="formatPrice(item.final_price) + ' x ' + item.qty"></span>
+                                        <div>
+                                            <div x-show="item.discount_amount > 0" class="text-red-500 font-bold text-[10px]">
+                                                Endirim: -<span x-text="formatPrice(item.discount_amount * item.qty)"></span>
+                                            </div>
+                                            <span x-text="formatPrice(item.final_price) + ' x ' + item.qty"></span>
+                                        </div>
                                     </template>
+
                                     <template x-if="item.is_gift">
                                         <span class="text-purple-600 font-bold uppercase text-[10px] border border-purple-200 px-1 rounded bg-white">HƏDİYYƏ</span>
                                     </template>
@@ -323,10 +353,14 @@
                                     title="Hədiyyə kimi işarələ">
                                 <i class="fa-solid fa-gift"></i>
                             </button>
-                            <div class="text-right w-20">
+                            <div class="text-right w-24">
                                 <p class="text-sm font-bold"
                                    :class="item.is_gift ? 'text-purple-600' : 'text-gray-800'"
                                    x-text="item.is_gift ? '0.00 ₼' : formatPrice(item.final_price * item.qty)"></p>
+
+                                <template x-if="!item.is_gift && item.discount_amount > 0">
+                                   <p class="text-xs text-gray-400 line-through" x-text="formatPrice(item.price * item.qty)"></p>
+                                </template>
                             </div>
                         </div>
 
@@ -347,20 +381,28 @@
             <!-- Hesablama -->
             <div class="p-4 bg-gray-50 border-t border-gray-200 space-y-2">
                 <!-- Promokod -->
-                <div class="flex gap-2 mb-3">
-                    <input type="text" x-model="promoCode" placeholder="Promokod" class="flex-1 rounded-lg border-gray-300 text-sm focus:ring-blue-500 focus:border-blue-500">
-                    <button @click="applyPromo()" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-lg text-sm hover:bg-gray-300 transition">
-                        <i class="fa-solid fa-check"></i>
-                    </button>
+                <div class="mb-3">
+                    <div class="flex gap-2">
+                        <input type="text" x-model="promoCode" placeholder="Promokod" class="flex-1 rounded-lg border-gray-300 text-sm focus:ring-blue-500 focus:border-blue-500">
+                        <button @click="applyPromo()" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-lg text-sm hover:bg-gray-300 transition">
+                            <i class="fa-solid fa-check"></i>
+                        </button>
+                    </div>
+                    <!-- Mesaj Yeri -->
+                    <div x-show="promoMessage" class="text-xs mt-1" :class="promoDiscountAmount > 0 ? 'text-green-600' : 'text-red-500'" x-text="promoMessage"></div>
                 </div>
 
                 <div class="flex justify-between text-sm text-gray-600">
-                    <span>Ara Cəm:</span>
+                    <span>Ara Cəm (Endirimsiz):</span>
                     <span class="font-medium" x-text="formatPrice(totals.subtotal)"></span>
                 </div>
 
                 <div class="flex justify-between text-sm text-red-500 font-bold bg-red-50 p-2 rounded">
-                    <span>Ümumi Endirim:</span>
+                    <div class="flex flex-col">
+                        <span>Ümumi Endirim:</span>
+                        <span x-show="totals.productDiscount > 0" class="text-xs font-normal text-red-400">(Məhsul: -<span x-text="formatPrice(totals.productDiscount)"></span>)</span>
+                        <span x-show="promoDiscountAmount > 0" class="text-xs font-normal text-red-400">(Promokod: -<span x-text="formatPrice(promoDiscountAmount)"></span>)</span>
+                    </div>
                     <span>-<span x-text="formatPrice(totals.discount)"></span></span>
                 </div>
 
