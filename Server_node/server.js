@@ -17,7 +17,7 @@ const server = http.createServer(app);
 // SERVER TƏRƏFİ SOCKET AYARLARI
 const io = new Server(server, { 
     cors: { origin: "*" },
-    path: '/socket.io' // Nginx bu yolu daxilə ötürür
+    path: '/socket.io'
 });
 
 app.set('trust proxy', 1);
@@ -113,15 +113,47 @@ const dashboardHTML = `
         <div id="page-dashboard">
             <h2 class="text-2xl font-bold text-white mb-6">Canlı Monitorinq</h2>
             <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-                <div class="stat-card border-l-4 border-blue-500"><p class="text-gray-400 text-xs uppercase">Satış</p><h3 class="text-3xl font-bold text-white mt-1" id="stat-sales">0.00 ₼</h3></div>
-                <div class="stat-card border-l-4 border-green-500"><p class="text-gray-400 text-xs uppercase">Mənfəət</p><h3 class="text-3xl font-bold text-green-400 mt-1" id="stat-profit">0.00 ₼</h3></div>
-                <div class="stat-card border-l-4 border-orange-500"><p class="text-gray-400 text-xs uppercase">Anbar</p><h3 class="text-2xl font-bold text-white mt-1" id="stat-stock-val">0.00 ₼</h3></div>
-                <div class="stat-card border-l-4 border-purple-500"><p class="text-gray-400 text-xs uppercase">Partnyorlar</p><h3 class="text-3xl font-bold text-white mt-1" id="stat-partners">0</h3></div>
+                <!-- Satış -->
+                <div class="stat-card border-l-4 border-blue-500">
+                    <p class="text-gray-400 text-xs uppercase">Satış</p>
+                    <h3 class="text-3xl font-bold text-white mt-1" id="stat-sales">0.00 ₼</h3>
+                </div>
+                
+                <!-- Xalis Mənfəət -->
+                <div class="stat-card border-l-4 border-green-500">
+                    <p class="text-gray-400 text-xs uppercase">Xalis Mənfəət</p>
+                    <!-- Təmiz Qazanc -->
+                    <h3 class="text-3xl font-bold text-green-400 mt-1" id="stat-profit">0.00 ₼</h3>
+                    <!-- Partnyorlara Ödənilən -->
+                    <p class="text-xs text-red-400 mt-1" id="stat-partners-cut" style="display:none;">Partnyor: -0.00 ₼</p>
+                </div>
+
+                <!-- Anbar -->
+                <div class="stat-card border-l-4 border-orange-500">
+                    <p class="text-gray-400 text-xs uppercase">Anbar</p>
+                    <h3 class="text-2xl font-bold text-white mt-1" id="stat-stock-val">0.00 ₼</h3>
+                </div>
+                
+                <!-- Partnyorlar Sayı -->
+                <div class="stat-card border-l-4 border-purple-500">
+                    <p class="text-gray-400 text-xs uppercase">Partnyorlar</p>
+                    <h3 class="text-3xl font-bold text-white mt-1" id="stat-partners">0</h3>
+                </div>
             </div>
+            
             <div class="stat-card">
                 <h3 class="text-lg font-bold text-white mb-4">Son Satışlar</h3>
                 <table class="w-full">
-                    <thead><tr><th>Saat</th><th>Qəbz</th><th>Ödəniş</th><th>Qazanc</th><th class="text-right">Məbləğ</th></tr></thead>
+                    <thead>
+                        <tr>
+                            <th>Saat</th>
+                            <th>Qəbz</th>
+                            <th>Ödəniş</th>
+                            <!-- DƏYİŞİKLİK: Sütun adı dəyişdirildi -->
+                            <th>Partnyor Qazancı</th>
+                            <th class="text-right">Məbləğ</th>
+                        </tr>
+                    </thead>
                     <tbody id="table-orders"></tbody>
                 </table>
             </div>
@@ -136,10 +168,9 @@ const dashboardHTML = `
     </div>
 
     <script>
-        // [VACİB] Socket Yolu: Nginx-dəki '/monitor/socket.io/' yoluna uyğun
         const socket = io({ 
             path: '/monitor/socket.io',
-            transports: ['polling', 'websocket'], // Polling əsasdır
+            transports: ['polling', 'websocket'], 
             reconnection: true
         });
         
@@ -164,12 +195,6 @@ const dashboardHTML = `
             log('Serverə qoşuldu.');
         });
         
-        socket.on('connect_error', (err) => {
-            log('Qoşulma Xətası: ' + err.message);
-            document.getElementById('status').innerText = '● Xəta'; 
-            document.getElementById('status').className = 'text-center text-xs text-red-500 font-bold mb-2';
-        });
-
         socket.on('disconnect', () => { 
             document.getElementById('status').innerText = '● Offline';
             document.getElementById('status').className = 'text-center text-xs text-red-500 font-bold mb-2';
@@ -191,63 +216,84 @@ const dashboardHTML = `
 
         function renderData(p) {
             const s = p.stats || {};
+
+            // Serverdən gələn dəqiq rəqəmlər
+            const totalSales = parseFloat(s.today_sales || 0);
+            const rawProfit = parseFloat(s.today_profit || 0);      // Ümumi (Qlobal) Mənfəət
+            const totalCommission = parseFloat(s.today_commission || 0); // Serverdə hesablanmış partnyor komissiyası
+
+            // Xalis Mənfəət Hesablaması
+            const netProfit = rawProfit - totalCommission;
+
+            // Rəqəmləri ekrana yazırıq
+            setText('stat-sales', formatMoney(totalSales));
+            setText('stat-profit', formatMoney(netProfit)); // Tam Xalis Mənfəət
             
-            setText('stat-sales', formatMoney(s.today_sales));
-            setText('stat-profit', formatMoney(s.today_profit));
+            // Komissiyanı göstər (əgər varsa)
+            const cutEl = document.getElementById('stat-partners-cut');
+            if (totalCommission > 0) {
+                cutEl.innerText = 'Partnyor: -' + formatMoney(totalCommission);
+                cutEl.style.display = 'block';
+            } else {
+                cutEl.style.display = 'none';
+            }
+            
             setText('stat-stock-val', formatMoney(s.warehouse_cost));
             setText('stat-partners', s.partner_count || 0);
 
-            // Son Satışlar
+            // CƏDVƏLLƏR
             if (p.latest_orders && Array.isArray(p.latest_orders)) {
                 const tbody = document.getElementById('table-orders');
                 tbody.innerHTML = p.latest_orders.map(o => {
+                    // Partnyor Qazancı (Sütun adı dəyişdirildi)
                     let profitHtml = '<span class="text-gray-500">-</span>';
                     if (o.calculated_commission > 0) {
                         profitHtml = \`<span class="text-green-400 font-bold">+\${o.calculated_commission}</span>\`;
                     }
-                    return \`<tr><td class="text-gray-400">\${o.time}</td><td class="text-white">#\${o.receipt_code}</td><td class="text-center text-sm">\${o.payment_method === 'card' ? 'KART' : 'NAĞD'}</td><td class="text-center">\${profitHtml}</td><td class="text-right text-green-400 font-bold">\${formatMoney(o.grand_total)}</td></tr>\`;
+                    
+                    // Refund (Geri qaytarma) vizualizasiyası
+                    let amountHtml = \`<span class="text-right text-green-400 font-bold">\${formatMoney(o.grand_total)}</span>\`;
+                    if (o.refunded_amount > 0) {
+                        let netSale = parseFloat(o.grand_total) - parseFloat(o.refunded_amount);
+                        amountHtml = \`
+                            <div class="flex flex-col items-end">
+                                <span class="text-green-400 font-bold">\${formatMoney(netSale)}</span>
+                                <span class="text-red-500 text-[10px]">Qaytar: -\${formatMoney(o.refunded_amount)}</span>
+                            </div>
+                        \`;
+                    }
+
+                    return \`
+                        <tr class="hover:bg-gray-800 transition">
+                            <td class="text-gray-400">\${o.time}</td>
+                            <td class="text-white">#\${o.receipt_code}</td>
+                            <td class="text-center text-sm">\${o.payment_method === 'card' ? 'KART' : 'NAĞD'}</td>
+                            <td class="text-center">\${profitHtml}</td>
+                            <td class="text-right">\${amountHtml}</td>
+                        </tr>
+                    \`;
                 }).join('');
             }
 
-            // Partnyorlar
             if (p.partners && Array.isArray(p.partners)) {
                 document.getElementById('table-partners').innerHTML = p.partners.map(x => \`<tr><td class="font-bold text-white">\${x.name}</td><td class="text-gray-400">\${x.phone || '-'}</td><td class="font-mono text-blue-300">\${x.telegram_chat_id || '-'}</td><td class="text-green-400 font-bold">\${formatMoney(x.balance)}</td></tr>\`).join('');
             }
-            
-            // Məhsullar
             if (p.products && Array.isArray(p.products)) {
                 document.getElementById('table-products').innerHTML = p.products.map(x => \`<tr><td class="text-white">\${x.name}</td><td class="text-gray-400">\${x.barcode}</td><td class="text-center text-blue-400 font-bold">\${x.quantity}</td><td class="text-right text-gray-300">\${formatMoney(x.selling_price)}</td></tr>\`).join('');
             }
-
-            // Anbar
             const warehouseData = (p.batches && p.batches.length > 0) ? p.batches : p.products;
             if (warehouseData && Array.isArray(warehouseData)) {
                 document.getElementById('tbody-batches').innerHTML = warehouseData.map(x => \`<tr><td class="text-white">\${x.product_name || x.name}</td><td class="text-yellow-500 font-mono">\${x.batch_code || x.barcode}</td><td class="text-center text-white">\${x.current_quantity || x.quantity}</td><td class="text-right text-gray-400">\${formatMoney(x.cost_price)}</td></tr>\`).join('');
             }
-
-            // [LOTEREYA DÜZƏLİŞİ]
-            let lotteryData = [];
-            if (p.lottery_orders && Array.isArray(p.lottery_orders) && p.lottery_orders.length > 0) {
-                lotteryData = p.lottery_orders;
-            } else if (p.latest_orders && Array.isArray(p.latest_orders)) {
-                lotteryData = p.latest_orders.filter(o => o.lottery_code);
-            }
-
-            const lotteryBody = document.getElementById('tbody-lottery');
+            
+            // Lotereya Cədvəli
+            const lotteryData = p.lottery_orders || (p.latest_orders ? p.latest_orders.filter(o => o.lottery_code) : []);
             if (lotteryData.length > 0) {
-                lotteryBody.innerHTML = lotteryData.map(x => \`
-                    <tr>
-                        <td class="text-white">#\${x.receipt_code}</td>
-                        <td class="text-gray-400">\${x.time}</td>
-                        <td class="text-yellow-400 font-bold font-mono text-lg">\${x.lottery_code}</td>
-                        <td class="text-right text-green-400">\${formatMoney(x.grand_total)}</td>
-                    </tr>
-                \`).join('');
+                document.getElementById('tbody-lottery').innerHTML = lotteryData.map(x => \`<tr><td class="text-white">#\${x.receipt_code}</td><td class="text-gray-400">\${x.time}</td><td class="text-yellow-400 font-bold font-mono text-lg">\${x.lottery_code}</td><td class="text-right text-green-400">\${formatMoney(x.grand_total)}</td></tr>\`).join('');
             } else {
-                lotteryBody.innerHTML = '<tr><td colspan="4" class="text-center py-8 text-gray-500 italic">Lotereya satışı yoxdur</td></tr>';
+                document.getElementById('tbody-lottery').innerHTML = '<tr><td colspan="4" class="text-center py-8 text-gray-500 italic">Lotereya satışı yoxdur</td></tr>';
             }
 
-            // Promokodlar
             if (p.promocodes && Array.isArray(p.promocodes)) {
                 document.getElementById('table-promos').innerHTML = p.promocodes.map(x => \`<tr><td class="text-purple-400 font-bold">\${x.code}</td><td class="text-white">\${x.discount_value}</td><td class="text-center text-white">\${x.orders_count || 0}</td><td class="text-center text-green-500">Aktiv</td></tr>\`).join('');
             }
@@ -268,12 +314,10 @@ const dashboardHTML = `
 // ==========================================
 // 3. ROUTES
 // ==========================================
-
 app.get('/', (req, res) => {
     if (req.session.authenticated) return res.send(dashboardHTML);
     res.send(loginHTML);
 });
-
 app.post('/login', (req, res) => {
     if (req.body.username === ADMIN_USER && req.body.password === ADMIN_PASS) {
         req.session.authenticated = true;
@@ -282,13 +326,7 @@ app.post('/login', (req, res) => {
         res.redirect('./?error=1');
     }
 });
-
-app.get('/logout', (req, res) => { 
-    req.session.destroy(); 
-    res.redirect('./'); 
-});
-
-// [API] Yalnız Monitorinq Məlumatlarını Qəbul Edir
+app.get('/logout', (req, res) => { req.session.destroy(); res.redirect('./'); });
 app.post('/api/report', (req, res) => {
     try {
         const payload = req.body.payload;
@@ -299,9 +337,7 @@ app.post('/api/report', (req, res) => {
         res.status(500).json({ status: false, error: e.message });
     }
 });
-
 io.on('connection', (socket) => {
     if (currentPayload) socket.emit('live_update', { type: 'full_report', payload: currentPayload });
 });
-
 server.listen(3000, () => console.log('📺 Monitor Serveri: Port 3000'));

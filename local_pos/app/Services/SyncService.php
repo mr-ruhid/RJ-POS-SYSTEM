@@ -30,42 +30,84 @@ class SyncService
         $this->apiKey = Setting::where('key', 'client_api_key')->value('value');
     }
 
-    /**
-     * [YENİLƏNMİŞ] Dəqiq Komissiya Göndərən Funksiya
-     */
     public function pushData()
     {
         if (!$this->serverUrl && !$this->telegramApiUrl) {
             return ['status' => false, 'message' => 'Heç bir server URL təyin edilməyib.'];
         }
 
-        // 1. SATIŞLAR (Son 50)
+        // --------------------------------------------------------
+        // 1. STATİSTİKA HESABLANMASI (DƏQİQ)
+        // --------------------------------------------------------
+        $today = Carbon::today();
+
+        // Bu günün bütün satışlarını detalları ilə gətiririk
+        $todayOrders = Order::with('items')->whereDate('created_at', $today)->get();
+
+        $statSales = 0;
+        $statCost = 0;
+        $statTax = 0;
+        $statCommission = 0;
+        $statRefunds = 0;
+
+        foreach ($todayOrders as $order) {
+            $statSales += $order->grand_total;
+            $statRefunds += $order->refunded_amount;
+            $statTax += $order->total_tax;
+            $statCommission += $order->total_commission;
+
+            // Xalis Maya Dəyəri (Satılan - Qaytarılan)
+            foreach ($order->items as $item) {
+                // Satılanın mayası
+                $statCost += ($item->cost * $item->quantity);
+
+                // Qaytarılanın mayasını xərcdən çıxırıq (Anbara qayıdır)
+                if ($item->returned_quantity > 0) {
+                    $statCost -= ($item->cost * $item->returned_quantity);
+                }
+            }
+        }
+
+        // Xalis Mənfəət Düsturu: (Satış - Qaytarma) - (Xalis Maya) - Vergi - Komissiya
+        $netProfit = ($statSales - $statRefunds) - $statCost - $statTax - $statCommission;
+        $netSales = $statSales - $statRefunds;
+
+        // Anbar Dəyəri
+        $warehouseCost = DB::table('product_batches')
+            ->where('current_quantity', '>', 0)
+            ->sum(DB::raw('current_quantity * cost_price'));
+
+        // Partnyor və Kritik Stok
+        $partnerCount = class_exists(Partner::class) ? Partner::count() : 0;
+        $criticalStockCount = Product::whereRaw('alert_limit > quantity')->count();
+
+
+        // --------------------------------------------------------
+        // 2. SATIŞ SİYAHISI (LİST)
+        // --------------------------------------------------------
         $orders = Order::with(['items', 'user', 'promocode.partner'])
             ->orderBy('created_at', 'desc')
             ->take(50)
             ->get()
             ->map(function($order) {
-
+                $commissionAmount = $order->total_commission ?? 0;
                 $partnerId = null;
-                // Partnyor ID-sini tapırıq (Telegram üçün vacibdir)
+
                 if ($order->promocode && $order->promocode->partner) {
                     $partnerId = $order->promocode->partner->id;
                 } elseif (!empty($order->promo_code)) {
-                    // Ehtiyat: Əgər ilişki yoxdursa string-dən tap
                     $pCode = Promocode::where('code', $order->promo_code)->first();
                     if($pCode) $partnerId = $pCode->partner_id;
                 }
-
-                // [DÜZƏLİŞ] Hesablamaq əvəzinə, birbaşa bazadakı rəqəmi götürürük
-                $commissionAmount = $order->total_commission ?? 0;
 
                 return [
                     'id' => $order->id,
                     'receipt_code' => $order->receipt_code,
                     'promo_code' => $order->promo_code,
                     'partner_id' => $partnerId,
-                    'calculated_commission' => $commissionAmount, // Bazadakı dəqiq rəqəm
+                    'calculated_commission' => $commissionAmount,
                     'grand_total' => $order->grand_total,
+                    'refunded_amount' => $order->refunded_amount ?? 0, // Qaytarma
                     'payment_method' => $order->payment_method,
                     'time' => $order->created_at->format('H:i:s'),
                     'items_count' => $order->items->count(),
@@ -74,7 +116,22 @@ class SyncService
                 ];
             })->toArray();
 
-        // 2. MƏHSULLAR
+        // 3. LOTEREYA
+        $lotteryOrders = Order::whereNotNull('lottery_code')
+            ->where('lottery_code', '!=', '')
+            ->orderBy('created_at', 'desc')
+            ->take(50)
+            ->get()
+            ->map(function($order) {
+                return [
+                    'receipt_code' => $order->receipt_code,
+                    'lottery_code' => $order->lottery_code,
+                    'grand_total' => $order->grand_total,
+                    'time' => $order->created_at->format('d.m.Y H:i'),
+                ];
+            })->toArray();
+
+        // Digər Məlumatlar (Olduğu kimi)
         $products = Product::all()->map(function($p) {
             return [
                 'id' => $p->id, 'name' => $p->name, 'barcode' => $p->barcode,
@@ -83,7 +140,6 @@ class SyncService
             ];
         })->toArray();
 
-        // 3. ANBAR
         $batches = ProductBatch::where('current_quantity', '>', 0)
             ->with('product:id,name')->get()
             ->map(function($b) {
@@ -95,33 +151,28 @@ class SyncService
                 ];
             })->toArray();
 
-        // 4. PARTNYORLAR & PROMOKODLAR
         $partners = class_exists(Partner::class) ? Partner::all()->toArray() : [];
         $promocodes = class_exists(Promocode::class) ? Promocode::with('partner')->get()->toArray() : [];
 
-        // 5. STATİSTİKA
-        $today = Carbon::today();
-        $todayStats = Order::whereDate('created_at', $today)
-            ->select(DB::raw('sum(grand_total) as total_sales'), DB::raw('count(*) as count_sales'), DB::raw('sum(grand_total - total_cost - total_tax) as net_profit'))->first();
-
-        $warehouseCost = DB::table('product_batches')->where('current_quantity', '>', 0)->sum(DB::raw('current_quantity * cost_price'));
-
+        // 4. YEKUN PAKET
         $payload = [
             'stats' => [
-                'today_sales' => $todayStats->total_sales ?? 0,
-                'today_count' => $todayStats->count_sales ?? 0,
-                'today_profit' => $todayStats->net_profit ?? 0,
+                'today_sales' => $netSales,     // Xalis Satış
+                'today_count' => $todayOrders->count(),
+                'today_profit' => $netProfit,   // Xalis Mənfəət (Komissiya və Qaytarma çıxılmış)
                 'warehouse_cost' => $warehouseCost,
-                'partner_count' => count($partners),
+                'partner_count' => $partnerCount,
+                'critical_stock' => $criticalStockCount
             ],
             'latest_orders' => $orders,
+            'lottery_orders' => $lotteryOrders,
             'products' => $products,
             'batches' => $batches,
             'partners' => $partners,
             'promocodes' => $promocodes
         ];
 
-        // GÖNDƏRİŞ
+        // 5. GÖNDƏRİŞ
         $messages = [];
         $status = true;
 
@@ -144,22 +195,13 @@ class SyncService
         return ['status' => $status, 'message' => implode(' | ', $messages)];
     }
 
-    /**
-     * Anlıq Satış Bildirişi (Telegram üçün)
-     */
     public function sendSaleNotification($order)
     {
         if (!$this->telegramApiUrl || empty($order->promo_code)) return;
-
         try {
             $order->load(['promocode.partner']);
-
-            // DÜZƏLİŞ: Bazadakı dəqiq rəqəmi götürürük
             $commissionAmount = $order->total_commission ?? 0;
-
-            $partnerData = null;
-            $promoData = null;
-            $partnerId = null;
+            $partnerData = null; $promoData = null; $partnerId = null;
 
             if ($order->promocode && $order->promocode->partner) {
                 $partner = $order->promocode->partner;
@@ -174,7 +216,7 @@ class SyncService
                     'receipt_code' => $order->receipt_code,
                     'promo_code' => $order->promo_code,
                     'partner_id' => $partnerId,
-                    'calculated_commission' => $commissionAmount, // Dəqiq rəqəm
+                    'calculated_commission' => $commissionAmount,
                     'grand_total' => $order->grand_total,
                     'time' => $order->created_at->format('H:i:s'),
                 ]],
@@ -182,18 +224,10 @@ class SyncService
                 'promocodes' => $promoData ? [$promoData] : []
             ];
 
-            Http::timeout(3)->post($this->telegramApiUrl, [
-                'type' => 'telegram_sync',
-                'api_key' => $this->apiKey,
-                'payload' => $payload
-            ]);
-
-        } catch (\Exception $e) {
-            Log::error("Telegram Notify Error: " . $e->getMessage());
-        }
+            Http::timeout(3)->post($this->telegramApiUrl, ['type' => 'telegram_sync', 'api_key' => $this->apiKey, 'payload' => $payload]);
+        } catch (\Exception $e) { Log::error("Telegram Notify Error: " . $e->getMessage()); }
     }
 
-    // Digər metodlar olduğu kimi qalır
     public function sendPartnerWelcome($partner, $promoCode, $discountValue, $commission) { /* ... */ }
     public function pullData() { return ['status' => true, 'message' => 'Monitorinq rejimi aktivdir.']; }
 }
