@@ -16,7 +16,7 @@ use Illuminate\Support\Facades\Storage;
 class ReportController extends Controller
 {
     /**
-     * 1. HESABATLAR PANELİ (Dashboard)
+     * 1. HESABATLAR PANELİ (Dashboard - Widgetlər)
      */
     public function index()
     {
@@ -24,70 +24,75 @@ class ReportController extends Controller
         $backupCount = count(array_filter($backupFiles, fn($f) => str_ends_with($f, '.zip') || str_ends_with($f, '.sql')));
         $lastBackup = Setting::where('key', 'last_backup_date')->value('value');
 
-        // Günlük Net Satış (Qaytarmalar çıxılmaqla)
+        // Bu günün XALİS satışı (Qaytarmalar çıxılır)
         $todaySales = Order::whereDate('created_at', Carbon::today())
             ->sum(DB::raw('grand_total - refunded_amount'));
 
         $totalProducts = Product::count();
 
-        // Kritik stok
+        // Kritik stok (Quantity sütununa görə)
         $criticalStockCount = Product::whereColumn('quantity', '<=', 'alert_limit')->count();
 
         return view('admin.reports.index', compact('backupCount', 'lastBackup', 'todaySales', 'totalProducts', 'criticalStockCount'));
     }
 
     /**
-     * 2. MƏNFƏƏT HESABATI (YENİLƏNMİŞ - DƏQİQ HESABLAMA)
+     * 2. MƏNFƏƏT HESABATI (ƏN DƏQİQ HESABLAMA)
      */
     public function profit(Request $request)
     {
+        // Tarix Aralığı (Varsayılan: Bu ay)
         $startDate = $request->start_date ? Carbon::parse($request->start_date)->startOfDay() : Carbon::now()->startOfMonth();
         $endDate = $request->end_date ? Carbon::parse($request->end_date)->endOfDay() : Carbon::now()->endOfDay();
 
-        // Satışları və içindəki məhsulları gətiririk
+        // Satışları və detallarını gətiririk
         $orders = Order::with('items')->whereBetween('created_at', [$startDate, $endDate])->get();
 
-        // 1. Ümumi Kassa Girişi (Brutto Satış)
+        // --- HESABLAMALAR ---
+
+        // 1. Kassa Girişi (Brutto Satış)
         $grossRevenue = $orders->sum('grand_total');
 
-        // 2. Geri Qaytarılan Məbləğ
+        // 2. Geri Qaytarılan Pul
         $totalRefunds = $orders->sum('refunded_amount');
 
-        // 3. Xalis Satış (Net Revenue) - View faylında tələb olunan dəyişən
+        // 3. Xalis Satış (Net Revenue)
         $netRevenue = $grossRevenue - $totalRefunds;
 
-        // 4. Maya Dəyəri Hesablaması
-        $totalCost = 0; // Satılan malların mayası
-        $totalReturnedCost = 0; // Qaytarılan malların mayası
+        // 4. Maya Dəyəri (Cost)
+        // Satılan malın mayasından, qaytarılan malın mayasını çıxmalıyıq
+        $totalSoldCost = 0;
+        $totalReturnedCost = 0;
 
         foreach ($orders as $order) {
             foreach ($order->items as $item) {
-                // Satılan malın mayası
-                $totalCost += ($item->cost * $item->quantity);
+                // Satılanın mayası
+                $totalSoldCost += ($item->cost * $item->quantity);
 
-                // Qaytarılan malın mayası (Anbara qayıtdığı üçün xərc deyil)
+                // Qaytarılanın mayası (Əgər qaytarılıbsa)
                 if ($item->returned_quantity > 0) {
                     $totalReturnedCost += ($item->cost * $item->returned_quantity);
                 }
             }
         }
 
-        // Xalis Maya Dəyəri (Yalnız müştəridə qalan mallar)
-        $netCost = $totalCost - $totalReturnedCost;
+        $netCost = $totalSoldCost - $totalReturnedCost;
 
-        // 5. Vergi, Endirim və Komissiya
+        // 5. Xərclər (Vergi + Komissiya)
         $totalTax = $orders->sum('total_tax');
-        $totalDiscount = $orders->sum('total_discount');
         $totalCommission = $orders->sum('total_commission');
 
+        // Məlumat üçün endirimlər (Mənfəətə təsir etmir, çünki satışdan artıq çıxılıb)
+        $totalDiscount = $orders->sum('total_discount');
+
         // 6. XALİS MƏNFƏƏT
-        // (Xalis Satış) - (Xalis Maya) - Vergi - Komissiya
+        // Düstur: (Xalis Satış) - (Xalis Maya) - Vergi - Komissiya
         $netProfit = $netRevenue - $netCost - $totalTax - $totalCommission;
 
         return view('admin.reports.profit', compact(
             'startDate', 'endDate',
             'grossRevenue', 'totalRefunds', 'netRevenue',
-            'totalCost', 'totalReturnedCost', 'netCost',
+            'totalSoldCost', 'totalReturnedCost', 'netCost',
             'totalTax', 'totalDiscount', 'totalCommission', 'netProfit'
         ));
     }
@@ -97,7 +102,7 @@ class ReportController extends Controller
      */
     public function stock()
     {
-        // Product cədvəlindən ümumi dəyərləri hesablayırıq
+        // Yalnız stoku olan məhsulları götürürük
         $products = Product::where('quantity', '>', 0)->get();
 
         $totalCostValue = 0;
@@ -105,19 +110,17 @@ class ReportController extends Controller
 
         foreach ($products as $product) {
             $qty = $product->quantity;
-            $baseCost = $qty * $product->cost_price;
 
-            // Vergi dərəcəsi varsa maya dəyərini artırırıq
-            $taxCost = $baseCost * ($product->tax_rate / 100);
+            // Maya dəyəri (Alış)
+            $totalCostValue += ($qty * $product->cost_price);
 
-            $totalCostValue += ($baseCost + $taxCost);
+            // Satış dəyəri
             $totalSaleValue += ($qty * $product->selling_price);
         }
 
         $potentialProfit = $totalSaleValue - $totalCostValue;
 
-        // Cədvəl üçün ProductBatch və ya Product istifadə edə bilərik.
-        // Ətraflı məlumat üçün ProductBatch (Partiyalar) daha yaxşıdır.
+        // Partiyalar üzrə siyahı (Əgər batch istifadə edirsinizsə)
         $batches = ProductBatch::with('product')
             ->where('current_quantity', '>', 0)
             ->orderBy('created_at', 'desc')
@@ -127,7 +130,7 @@ class ReportController extends Controller
     }
 
     /**
-     * 4. PARTNYORLAR HESABATI
+     * 4. PARTNYOR HESABATI
      */
     public function partners()
     {
@@ -156,7 +159,7 @@ class ReportController extends Controller
             ->latest()
             ->paginate(15);
 
-        // Ödəniş növləri üzrə statistika (Net satış - Qaytarma çıxılmış)
+        // Ödəniş növləri üzrə statistika (Xalis satış)
         $paymentStats = Order::whereBetween('created_at', [$startDate, $endDate])
             ->select(
                 'payment_method',

@@ -13,7 +13,6 @@ class Order extends Model
     public $incrementing = false;
     protected $keyType = 'string';
 
-    // Bütün sütunların yazılmasına icazə veririk
     protected $guarded = [];
 
     protected $casts = [
@@ -22,38 +21,29 @@ class Order extends Model
         'created_at' => 'datetime',
     ];
 
-    /**
-     * Satışı edən istifadəçi (Kassir)
-     */
     public function user()
     {
         return $this->belongsTo(User::class);
     }
 
-    /**
-     * Satışın içindəki məhsullar
-     */
     public function items()
     {
         return $this->hasMany(OrderItem::class);
     }
 
-    /**
-     * [VACİB] İstifadə olunan promokod
-     * Bu əlaqə vasitəsilə partnyoru tapırıq
-     */
     public function promocode()
     {
         return $this->belongsTo(Promocode::class);
     }
 
     /**
-     * Unikal Lotereya Kodu Yaradılması
+     * Unikal Lotereya Kodu Yaradılması (5 Rəqəmli)
      */
     public static function generateUniqueLotteryCode()
     {
         do {
-            $code = rand(10000000, 99999999);
+            // [DÜZƏLİŞ] 8 rəqəmdən 5 rəqəmə endirildi (10000 - 99999)
+            $code = rand(10000, 99999);
         } while (self::where('lottery_code', $code)->exists());
 
         return (string) $code;

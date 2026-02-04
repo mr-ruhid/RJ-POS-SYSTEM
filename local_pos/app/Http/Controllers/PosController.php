@@ -155,10 +155,10 @@ class PosController extends Controller
 
             $userId = Auth::id() ?? 1;
 
-            // Lotereya Kodu
+            // Lotereya Kodu (5 Rəqəmli)
             $lotteryCode = method_exists(Order::class, 'generateUniqueLotteryCode')
                             ? Order::generateUniqueLotteryCode()
-                            : (string) rand(10000000, 99999999);
+                            : (string) rand(10000, 99999);
 
             // İlkin Order yaradılır
             $order = Order::create([
@@ -305,8 +305,8 @@ class PosController extends Controller
 
             DB::commit();
 
-            // [YENİ] TELEGRAM BİLDİRİŞİ
-            // Satış uğurlu oldusa, dərhal Telegram API-yə xəbər veririk
+            // [YENİ] ANLIQ TELEGRAM BİLDİRİŞİ GÖNDƏR
+            // (try-catch içində ki, xəta olarsa satış dayanmasın)
             try {
                 if ($promoCodeStr) {
                     $syncService->sendSaleNotification($order);
@@ -327,10 +327,7 @@ class PosController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
             Log::error('POS Error: ' . $e->getMessage());
-            return response()->json([
-                'success' => false,
-                'message' => 'Xəta baş verdi: ' . $e->getMessage()
-            ], 500);
+            return response()->json(['success' => false, 'message' => 'Xəta baş verdi: ' . $e->getMessage()], 500);
         }
     }
 
