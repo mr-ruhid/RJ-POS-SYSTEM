@@ -15,8 +15,6 @@ const app = express();
 const server = http.createServer(app);
 
 // SERVER TƏRƏFİ SOCKET AYARLARI
-// Node.js daxildə '/socket.io' dinləyir.
-// Nginx '/monitor/socket.io' sorğusunu bura yönləndirəndə '/monitor' hissəsini silir.
 const io = new Server(server, { 
     cors: { origin: "*" },
     path: '/socket.io'
@@ -34,7 +32,6 @@ app.use(session({
     cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 }
 }));
 
-// Son gələn məlumatı yaddaşda saxlayırıq
 let currentPayload = null;
 
 // ==========================================
@@ -61,7 +58,7 @@ const loginHTML = `
 `;
 
 // ==========================================
-// 2. DASHBOARD SƏHİFƏSİ (DÜZƏLDİLMİŞ)
+// 2. DASHBOARD SƏHİFƏSİ
 // ==========================================
 const dashboardHTML = `
 <!DOCTYPE html>
@@ -87,7 +84,6 @@ const dashboardHTML = `
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
         
-        /* Debug Sahəsi */
         #debug-log { font-family: monospace; font-size: 10px; color: #aaa; margin-bottom: 10px; height: 20px; overflow: hidden; }
     </style>
 </head>
@@ -102,6 +98,7 @@ const dashboardHTML = `
             <div class="nav-link" onclick="switchPage('products', this)"><i class="fa-solid fa-box-open mr-3"></i> Məhsullar</div>
             <div class="nav-link" onclick="switchPage('warehouse', this)"><i class="fa-solid fa-warehouse mr-3"></i> Anbar</div>
             <div class="nav-link" onclick="switchPage('lottery', this)"><i class="fa-solid fa-ticket mr-3"></i> Lotereya</div>
+            <div class="nav-link" onclick="switchPage('promocodes', this)"><i class="fa-solid fa-tags mr-3"></i> Promokodlar</div>
         </div>
         <div class="p-4 border-t border-slate-700">
             <div id="status" class="text-center text-xs text-red-500 font-bold mb-2">● Offline</div>
@@ -110,8 +107,7 @@ const dashboardHTML = `
     </div>
 
     <div class="content">
-        <!-- Debug Log -->
-        <div id="debug-log">Sistem işə düşür...</div>
+        <div id="debug-log">Bağlantı qurulur...</div>
 
         <!-- DASHBOARD -->
         <div id="page-dashboard">
@@ -136,10 +132,11 @@ const dashboardHTML = `
         <div id="page-products" class="hidden-page"><h2 class="text-2xl font-bold text-white mb-6">Məhsullar</h2><div class="stat-card overflow-y-auto max-h-[700px]"><table class="w-full"><thead><tr><th>Ad</th><th>Barkod</th><th class="text-center">Stok</th><th class="text-right">Qiymət</th></tr></thead><tbody id="table-products"></tbody></table></div></div>
         <div id="page-warehouse" class="hidden-page"><h2 class="text-2xl font-bold text-white mb-6">Anbar</h2><div class="stat-card overflow-y-auto max-h-[700px]"><table class="w-full"><thead><tr><th>Məhsul</th><th>Kod</th><th class="text-center">Say</th><th class="text-right">Maya</th></tr></thead><tbody id="tbody-batches"></tbody></table></div></div>
         <div id="page-lottery" class="hidden-page"><h2 class="text-2xl font-bold text-white mb-6">Lotereya</h2><div class="stat-card"><table class="w-full"><thead><tr><th>Qəbz</th><th>Lotereya Kodu</th><th class="text-right">Məbləğ</th></tr></thead><tbody id="tbody-lottery"></tbody></table></div></div>
+        <div id="page-promocodes" class="hidden-page"><h2 class="text-2xl font-bold text-white mb-6">Promokodlar</h2><div class="stat-card"><table class="w-full"><thead><tr><th>Kod</th><th>Endirim</th><th class="text-center">İstifadə</th><th class="text-center">Status</th></tr></thead><tbody id="table-promos"></tbody></table></div></div>
     </div>
 
     <script>
-        // [VACİB] Client tərəfində yol '/monitor/socket.io' olmalıdır ki, Nginx tuta bilsin
+        // [VACİB] Socket Yolu: Nginx-dəki '/monitor/socket.io/' yoluna uyğun
         const socket = io({ 
             path: '/monitor/socket.io',
             transports: ['websocket', 'polling'] 
@@ -147,14 +144,12 @@ const dashboardHTML = `
         
         let currentPayload = null;
 
-        // Logging funksiyası
         function log(msg) {
             const el = document.getElementById('debug-log');
             el.innerText = msg;
             console.log(msg);
         }
 
-        // Navigation
         function switchPage(id, el) {
             document.querySelectorAll('[id^="page-"]').forEach(el => el.classList.add('hidden-page'));
             document.getElementById('page-' + id).classList.remove('hidden-page');
@@ -162,12 +157,10 @@ const dashboardHTML = `
             el.classList.add('active');
         }
 
-        // --- SOCKET EVENTLƏRİ ---
-        
         socket.on('connect', () => { 
             document.getElementById('status').innerText = '● Online'; 
             document.getElementById('status').className = 'text-center text-xs text-green-500 font-bold mb-2';
-            log('Serverə uğurla qoşuldu. Məlumat gözlənilir...');
+            log('Serverə qoşuldu. ID: ' + socket.id);
         });
         
         socket.on('connect_error', (err) => {
@@ -182,10 +175,8 @@ const dashboardHTML = `
             log('Serverdən ayrıldı.');
         });
 
-        // DATA QƏBULU
         socket.on('live_update', (data) => {
             log('Data paketi gəldi: ' + data.type + ' (' + data.time + ')');
-            
             if (data.type === 'full_report') {
                 try {
                     renderData(data.payload);
@@ -201,17 +192,14 @@ const dashboardHTML = `
             currentPayload = p;
             const s = p.stats || {};
             
-            // Statistikalar
             setText('stat-sales', formatMoney(s.today_sales));
             setText('stat-profit', formatMoney(s.today_profit));
             setText('stat-stock-val', formatMoney(s.warehouse_cost));
             setText('stat-partners', s.partner_count || 0);
 
-            // Son Satışlar
             if (p.latest_orders && Array.isArray(p.latest_orders)) {
                 const tbody = document.getElementById('table-orders');
                 tbody.innerHTML = p.latest_orders.map(o => {
-                    // Qazancın rəngləndirilməsi (varsa)
                     let profitHtml = '<span class="text-gray-500">-</span>';
                     if (o.calculated_commission > 0) {
                         profitHtml = \`<span class="text-green-400 font-bold">+\${o.calculated_commission}</span>\`;
@@ -220,26 +208,26 @@ const dashboardHTML = `
                 }).join('');
             }
 
-            // Partnyorlar
             if (p.partners && Array.isArray(p.partners)) {
                 document.getElementById('table-partners').innerHTML = p.partners.map(x => \`<tr><td class="font-bold text-white">\${x.name}</td><td class="text-gray-400">\${x.phone || '-'}</td><td class="font-mono text-blue-300">\${x.telegram_chat_id || '-'}</td><td class="text-green-400 font-bold">\${formatMoney(x.balance)}</td></tr>\`).join('');
             }
             
-            // Məhsullar
             if (p.products && Array.isArray(p.products)) {
                 document.getElementById('table-products').innerHTML = p.products.map(x => \`<tr><td class="text-white">\${x.name}</td><td class="text-gray-400">\${x.barcode}</td><td class="text-center text-blue-400 font-bold">\${x.quantity}</td><td class="text-right text-gray-300">\${formatMoney(x.selling_price)}</td></tr>\`).join('');
             }
 
-            // Anbar
             const warehouseData = (p.batches && p.batches.length > 0) ? p.batches : p.products;
             if (warehouseData && Array.isArray(warehouseData)) {
                 document.getElementById('tbody-batches').innerHTML = warehouseData.map(x => \`<tr><td class="text-white">\${x.product_name || x.name}</td><td class="text-yellow-500 font-mono">\${x.batch_code || x.barcode}</td><td class="text-center text-white">\${x.current_quantity || x.quantity}</td><td class="text-right text-gray-400">\${formatMoney(x.cost_price)}</td></tr>\`).join('');
             }
 
-            // Lotereya
             if (p.latest_orders) {
                 const lotteryData = p.latest_orders.filter(o => o.lottery_code);
                 document.getElementById('tbody-lottery').innerHTML = lotteryData.map(x => \`<tr><td class="text-white">#\${x.receipt_code}</td><td class="text-yellow-400 font-bold font-mono text-lg">\${x.lottery_code}</td><td class="text-right text-green-400">\${formatMoney(x.grand_total)}</td></tr>\`).join('');
+            }
+
+            if (p.promocodes && Array.isArray(p.promocodes)) {
+                document.getElementById('table-promos').innerHTML = p.promocodes.map(x => \`<tr><td class="text-purple-400 font-bold">\${x.code}</td><td class="text-white">\${x.discount_value}</td><td class="text-center text-white">\${x.orders_count}</td><td class="text-center text-green-500">Aktiv</td></tr>\`).join('');
             }
         }
 
@@ -291,6 +279,7 @@ app.post('/api/report', (req, res) => {
 });
 
 io.on('connection', (socket) => {
+    console.log('⚡ Brauzer qoşuldu:', socket.id);
     if (currentPayload) socket.emit('live_update', { type: 'full_report', payload: currentPayload });
 });
 
