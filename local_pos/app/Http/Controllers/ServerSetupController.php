@@ -11,18 +11,16 @@ class ServerSetupController extends Controller
 {
     public function index()
     {
-        // Ayarları array formatında çəkirik
+        // Bazadan mövcud ayarları çəkirik
         $settings = Setting::pluck('value', 'key')->toArray();
 
-        // [Sizin Məntiq]: API Açar yoxdursa, səhifə açılan kimi yarat
-        // Bu çox yaxşı fikirdir, çünki user dərhal açarı görür.
+        // Server API açarı yoxdursa yaradırıq (Server rejimi üçün)
         if (!isset($settings['server_api_key'])) {
             $apiKey = 'rj_pos_' . Str::random(32);
             Setting::updateOrCreate(['key' => 'server_api_key'], ['value' => $apiKey]);
             $settings['server_api_key'] = $apiKey;
         }
 
-        // View yolu: Sizin strukturda 'admin.settings.server' olduğu görünür
         return view('admin.settings.server', compact('settings'));
     }
 
@@ -32,6 +30,8 @@ class ServerSetupController extends Controller
         $request->validate([
             'system_mode' => 'required|in:standalone,server,client',
             'server_url' => 'nullable|url',
+            // [YENİ] Telegram API linki üçün validasiya
+            'server_telegram_api' => 'nullable|url',
             'client_api_key' => 'nullable|string',
         ]);
 
@@ -43,17 +43,21 @@ class ServerSetupController extends Controller
 
         // 2. Digər məlumatları yadda saxla
         if ($request->has('server_url')) {
-            // [VACİB DÜZƏLİŞ]: URL-in sonundakı "/" işarəsini silirik.
-            // Bu olmasa, "https://site.com//api" problemi yaranır və sistem işləmir.
+            // URL-in sonundakı "/" işarəsini silirik
             $cleanUrl = rtrim($request->server_url, '/');
-
             Setting::updateOrCreate(['key' => 'server_url'], ['value' => $cleanUrl]);
+        }
+
+        // [YENİ] Telegram API Linkini Yadda Saxla
+        if ($request->has('server_telegram_api')) {
+            $cleanTgUrl = rtrim($request->server_telegram_api, '/');
+            Setting::updateOrCreate(['key' => 'server_telegram_api'], ['value' => $cleanTgUrl]);
         }
 
         if ($request->has('client_api_key')) {
             Setting::updateOrCreate(['key' => 'client_api_key'], ['value' => $request->client_api_key]);
         }
 
-        return back()->with('success', 'Sistem rejimi uğurla yeniləndi: ' . strtoupper($request->system_mode));
+        return back()->with('success', 'Sistem rejimi və bağlantılar yeniləndi: ' . strtoupper($request->system_mode));
     }
 }

@@ -9,51 +9,18 @@ class Order extends Model
 {
     use HasFactory;
 
-    protected $fillable = [
-        'receipt_code',
-        'customer_id',
-        'promocode_id',
-        'subtotal',
-        'discount_amount',
-        'total_tax',
-        'total_cost',
-        'grand_total',
-        'payment_method',
-        'payment_status',
-        'change_amount',
-        'lottery_code',
-        'notes'
-    ];
-
-    protected $casts = [
-        'subtotal' => 'decimal:2',
-        'discount_amount' => 'decimal:2',
-        'total_tax' => 'decimal:2',
-        'total_cost' => 'decimal:2',
-        'grand_total' => 'decimal:2',
-        'change_amount' => 'decimal:2',
-    ];
-
-    // İlişkilər (Relationships)
+    protected $guarded = [];
 
     /**
-     * Sifarişə aid promokod
+     * Satışı edən istifadəçi (Kassir)
      */
-    public function promocode()
+    public function user()
     {
-        return $this->belongsTo(Promocode::class, 'promocode_id');
+        return $this->belongsTo(User::class);
     }
 
     /**
-     * Sifarişə aid müştəri
-     */
-    public function customer()
-    {
-        return $this->belongsTo(Customer::class, 'customer_id');
-    }
-
-    /**
-     * Sifarişə aid məhsullar
+     * Satışın içindəki məhsullar
      */
     public function items()
     {
@@ -61,10 +28,22 @@ class Order extends Model
     }
 
     /**
-     * Sifarişə aid ödənişlər
+     * İstifadə olunan promokod
      */
-    public function payments()
+    public function promocode()
     {
-        return $this->hasMany(OrderPayment::class);
+        return $this->belongsTo(Promocode::class);
+    }
+
+    /**
+     * Unikal Lotereya Kodu Yaradılması
+     */
+    public static function generateUniqueLotteryCode()
+    {
+        do {
+            $code = rand(10000000, 99999999);
+        } while (self::where('lottery_code', $code)->exists());
+
+        return (string) $code;
     }
 }

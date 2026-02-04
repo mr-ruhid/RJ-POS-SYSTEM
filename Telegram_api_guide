@@ -4,6 +4,7 @@ To connect to the Telegram API
 2. Add the following here:
 
 TELEGRAM_BOT_TOKEN=your_token
+TG_API_PORT=4000
 
 3. CTRL + X
 4. Y

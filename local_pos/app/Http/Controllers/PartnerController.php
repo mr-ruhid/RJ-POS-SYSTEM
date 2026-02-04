@@ -18,36 +18,43 @@ class PartnerController extends Controller
     public function index()
     {
         $systemMode = Setting::where('key', 'system_mode')->value('value') ?? 'standalone';
-
-        // Balansa görə sıralaya bilərik və ya son əlavə olunanlara görə
         $partners = Partner::with('promocodes')->latest()->paginate(20);
 
         return view('admin.partners.index', compact('partners', 'systemMode'));
     }
 
     /**
-     * 1. Serverdən (Node.js) Gözləyən Telegram İstəklərini Çəkmək (AJAX)
+     * [AJAX] Serverdən (Node.js) Gözləyən Telegram İstəklərini Çəkmək
      */
     public function fetchTelegramRequests()
     {
+        // 1. Server URL-ni götürürük (Tənzimləmələrdən)
         $serverUrl = Setting::where('key', 'server_url')->value('value');
-        $apiKey = Setting::where('key', 'client_api_key')->value('value');
+        $apiKey = Setting::where('key', 'client_api_key')->value('value'); // Əgər serverdə yoxlama varsa
 
         if (!$serverUrl) {
-            return response()->json(['error' => 'Server URL təyin edilməyib.'], 400);
+            return response()->json(['error' => 'Server URL təyin edilməyib (Tənzimləmələrə baxın).'], 400);
         }
 
         try {
+            // URL-i düzəldirik (Sondakı slash-ı silirik)
+            $url = rtrim($serverUrl, '/');
+
             // Node.js API-ə sorğu göndəririk
-            // URL: https://vmi.../api/pending-partners
-            $response = Http::timeout(5)->get(rtrim($serverUrl, '/') . '/api/pending-partners', [
+            // Əgər Nginx-də /monitor/ istifadə edirsinizsə, URL belə ola bilər: https://domain.com/monitor/api/pending-partners
+            // Node.js kodu /api/pending-partners dinləyir.
+
+            // Sadəlik üçün birbaşa yapışdırırıq (Server URL-də /monitor varsa işləyəcək)
+            $fullUrl = $url . '/api/pending-partners';
+
+            $response = Http::timeout(5)->get($fullUrl, [
                 'api_key' => $apiKey
             ]);
 
             if ($response->successful()) {
                 return response()->json($response->json());
             } else {
-                return response()->json(['error' => 'Serverdən cavab alınmadı: ' . $response->status()], 500);
+                return response()->json(['error' => 'Serverdən xətalı cavab gəldi: ' . $response->status()], 500);
             }
         } catch (\Exception $e) {
             return response()->json(['error' => 'Bağlantı xətası: ' . $e->getMessage()], 500);
@@ -55,11 +62,11 @@ class PartnerController extends Controller
     }
 
     /**
-     * 2. Telegram İstəyini Təsdiqləyib Partnyor və Promokod Yaratmaq
+     * [POST] Telegram İstəyini Təsdiqləyib Partnyor + Promokod Yaratmaq
      */
     public function createFromTelegram(Request $request)
     {
-        // Validasiya
+        // 1. Validasiya
         $request->validate([
             'telegram_chat_id' => 'required|string|unique:partners,telegram_chat_id',
             'name' => 'required|string|max:255',
@@ -67,7 +74,7 @@ class PartnerController extends Controller
 
             // Promokod Məlumatları
             'promo_code' => 'required|string|unique:promocodes,code',
-            'discount_value' => 'required|numeric|min:0', // Endirim faizi və ya məbləği
+            'discount_value' => 'required|numeric|min:0',
             'discount_type' => 'required|in:percent,fixed',
 
             // Partnyor Qazancı
@@ -82,25 +89,23 @@ class PartnerController extends Controller
                 'name' => $request->name,
                 'phone' => $request->phone,
                 'telegram_chat_id' => $request->telegram_chat_id,
-                'commission_percent' => $request->commission_percent, // Partnyorun qazancı (məs: 5%)
+                'commission_percent' => $request->commission_percent,
                 'balance' => 0,
                 'is_active' => true
             ]);
 
-            // B. Promokodu Yaradırıq və Partnyora Bağlayırıq
+            // B. Promokodu Yaradırıq
             Promocode::create([
                 'code' => strtoupper($request->promo_code),
-                'discount_type' => $request->discount_type, // 'percent' və ya 'fixed'
-                'discount_value' => $request->discount_value, // Müştəriyə ediləcək endirim
-                'partner_id' => $partner->id, // Əlaqə
+                'discount_type' => $request->discount_type,
+                'discount_value' => $request->discount_value,
+                'partner_id' => $partner->id,
                 'is_active' => true,
-                'usage_limit' => null, // Sonsuz limit
+                'usage_limit' => null,
                 'orders_count' => 0
             ]);
 
-            // C. Serverə (Node.js) təsdiq mesajı göndərmək
-            // Biz burada Socket emit edə bilmirik (PHP-dir), amma bu məlumat
-            // növbəti sinxronizasiyada serverə gedəcək və server özü başa düşəcək.
+            // C. Növbəti sinxronizasiyada bu məlumatlar serverə gedəcək və server biləcək ki, bu ID artıq partnyordur.
 
             DB::commit();
             return back()->with('success', 'Partnyor və Promokod uğurla yaradıldı!');
@@ -112,85 +117,42 @@ class PartnerController extends Controller
         }
     }
 
-    /**
-     * 3. Partnyora Ödəniş Etmək (Balansdan Çıxmaq)
-     */
-    public function payout(Request $request, Partner $partner)
-    {
-        $request->validate([
-            'amount' => 'required|numeric|min:0.01|max:' . $partner->balance,
-            'note' => 'nullable|string'
-        ]);
-
-        // Balansı azaldırıq (Sadə yanaşma)
-        // Daha təkmil sistemdə 'transactions' cədvəlinə də yazmaq lazımdır (History üçün)
-        $partner->decrement('balance', $request->amount);
-
-        // Qeyd: Bu dəyişiklik də növbəti sinxronizasiyada serverə gedəcək
-
-        return back()->with('success', number_format($request->amount, 2) . ' AZN ödəniş edildi. Balans yeniləndi.');
-    }
-
-    /**
-     * 4. Partnyor Parametrlərini Yeniləmək (Edit)
-     */
+    // Digər Metodlar (Ödəniş, Silmə, Update)
     public function updateConfig(Request $request, Partner $partner)
     {
         $request->validate([
             'commission_percent' => 'required|numeric|min:0|max:100',
-            'promo_code' => 'required|string', // Promokod dəyişə bilər
+            'promo_code' => 'required|string',
             'discount_value' => 'required|numeric|min:0',
         ]);
 
-        DB::beginTransaction();
-        try {
-            // Partnyor komissiyasını yenilə
-            $partner->update(['commission_percent' => $request->commission_percent]);
+        $partner->update(['commission_percent' => $request->commission_percent]);
 
-            // Promokodu yenilə (İlk tapılan promokodu)
-            $promo = $partner->promocodes()->first();
-            if ($promo) {
-                $promo->update([
-                    'code' => strtoupper($request->promo_code),
-                    'discount_value' => $request->discount_value
-                ]);
-            } else {
-                // Yoxdursa yarat
-                Promocode::create([
-                    'partner_id' => $partner->id,
-                    'code' => strtoupper($request->promo_code),
-                    'discount_type' => 'percent',
-                    'discount_value' => $request->discount_value,
-                    'is_active' => true
-                ]);
-            }
-
-            DB::commit();
-            return back()->with('success', 'Partnyor parametrləri yeniləndi.');
-
-        } catch (\Exception $e) {
-            DB::rollBack();
-            return back()->with('error', 'Yeniləmə xətası: ' . $e->getMessage());
+        $promo = $partner->promocodes()->first();
+        if ($promo) {
+            $promo->update(['code' => strtoupper($request->promo_code), 'discount_value' => $request->discount_value]);
+        } else {
+            Promocode::create([
+                'partner_id' => $partner->id,
+                'code' => strtoupper($request->promo_code),
+                'discount_type' => 'percent',
+                'discount_value' => $request->discount_value,
+                'is_active' => true
+            ]);
         }
+        return back()->with('success', 'Yeniləndi.');
     }
 
-    // Silmək
+    public function payout(Request $request, Partner $partner)
+    {
+        $request->validate(['amount' => 'required|numeric|min:0.01|max:' . $partner->balance]);
+        $partner->decrement('balance', $request->amount);
+        return back()->with('success', 'Ödəniş edildi.');
+    }
+
     public function destroy(Partner $partner)
     {
-        $partner->delete(); // Cascade ilə promokodlar da silinəcək (əgər migration düzgündürsə)
-        return back()->with('success', 'Partnyor silindi.');
-    }
-
-    // AJAX ilə statistika (Opsional - Modalda göstərmək üçün)
-    public function getStats(Partner $partner)
-    {
-        // Partnyorun ümumi qazancı (ödənişlər daxil olmadan)
-        // Bunu order tarixçəsindən hesablamaq lazımdır
-        // Hələlik sadə balans qaytarırıq
-        return response()->json([
-            'balance' => $partner->balance,
-            'commission_percent' => $partner->commission_percent,
-            'promocodes' => $partner->promocodes
-        ]);
+        $partner->delete();
+        return back()->with('success', 'Silindi.');
     }
 }

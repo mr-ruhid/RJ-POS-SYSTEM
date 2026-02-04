@@ -10,7 +10,7 @@
         </div>
 
         <div class="flex gap-2">
-            <!-- Telegram-dan Yarat -->
+            <!-- Telegram-dan Yarat Düyməsi -->
             <button onclick="openTelegramModal()" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition flex items-center shadow-sm">
                 <i class="fa-brands fa-telegram mr-2"></i> Telegram İstəkləri
             </button>
@@ -130,25 +130,27 @@
 
 </div>
 
-<!-- 1. TELEGRAM İSTƏKLƏRİ MODALI -->
+<!-- 1. TELEGRAM İSTƏKLƏRİ MODALI (ƏSAS İŞ BURADA GÖRÜLÜR) -->
 <div id="telegram-modal" class="fixed inset-0 bg-black/60 hidden flex items-center justify-center z-50 backdrop-blur-sm transition-opacity">
     <div class="bg-white rounded-xl w-[600px] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+
         <div class="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50">
             <h3 class="text-lg font-bold text-gray-800"><i class="fa-brands fa-telegram text-blue-500 mr-2"></i> Telegram İstəkləri</h3>
             <button onclick="closeModal('telegram-modal')" class="text-gray-400 hover:text-gray-600"><i class="fa-solid fa-xmark text-xl"></i></button>
         </div>
 
         <div class="p-6 overflow-y-auto custom-scrollbar">
+
             <!-- Yüklənir -->
             <div id="tg-loading" class="text-center py-8 hidden">
                 <i class="fa-solid fa-circle-notch fa-spin text-blue-500 text-3xl"></i>
                 <p class="text-sm text-gray-500 mt-3">Serverdən sorğular yüklənir...</p>
             </div>
 
-            <!-- Siyahı -->
+            <!-- İstək Siyahısı -->
             <div id="tg-list" class="space-y-2 mb-6"></div>
 
-            <!-- Form (Seçiləndə görünür) -->
+            <!-- Konfiqurasiya Forması (Seçim ediləndə görünür) -->
             <form id="tg-form" action="{{ route('partners.create_from_telegram') }}" method="POST" class="hidden border-t border-dashed border-gray-300 pt-6 mt-2 animate-fade-in">
                 @csrf
                 <input type="hidden" name="telegram_chat_id" id="form-chat-id">
@@ -193,6 +195,7 @@
                     Təsdiqlə və Yarat
                 </button>
             </form>
+
         </div>
     </div>
 </div>
@@ -262,7 +265,6 @@
             <div class="space-y-4">
                 <div><label class="text-xs font-bold text-gray-500 uppercase">Ad Soyad</label><input type="text" name="name" required class="w-full border-gray-300 rounded-lg"></div>
                 <div><label class="text-xs font-bold text-gray-500 uppercase">Telefon</label><input type="text" name="phone" class="w-full border-gray-300 rounded-lg"></div>
-                <!-- Manualda komissiya və promokod sonradan edit ilə əlavə olunur -->
             </div>
             <div class="flex justify-end gap-2 mt-6">
                 <button type="button" onclick="closeModal('manual-modal')" class="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">Ləğv</button>
@@ -282,8 +284,10 @@
         document.getElementById('telegram-modal').classList.remove('hidden');
         const list = document.getElementById('tg-list');
         const loading = document.getElementById('tg-loading');
+        const form = document.getElementById('tg-form');
 
         list.innerHTML = '';
+        form.classList.add('hidden'); // Formu gizlət
         loading.classList.remove('hidden');
 
         try {
