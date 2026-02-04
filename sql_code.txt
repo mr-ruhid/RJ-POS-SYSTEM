@@ -1,0 +1,13 @@
+If there is a cashier request in the admin login, write this code in the SQL database
+
+1.
+
+-- Adding roles
+
+INSERT INTO `roles` (`id`, `name`, `created_at`, `updated_at`) VALUES
+(1, 'admin', NOW(), NOW()),
+(2, 'cashier', NOW(), NOW());
+
+2. 
+
+Go to the user table and write 1 in the role_id section!

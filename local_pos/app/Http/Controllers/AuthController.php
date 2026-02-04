@@ -8,47 +8,95 @@ use App\Models\User;
 
 class AuthController extends Controller
 {
-    // Giriş səhifəsini göstər
-    public function showLoginForm()
+    // ==========================================
+    // 1. ADMIN GİRİŞİ
+    // ==========================================
+    public function showAdminLoginForm()
     {
-        // Əgər artıq giriş edibsə, ana səhifəyə at
+        // Əgər artıq giriş edibsə, roluna uyğun yönləndir
         if (Auth::check()) {
-            return redirect()->route('dashboard');
+            return $this->redirectBasedOnRole();
         }
-        return view('auth.login');
+        return view('auth.login', ['url' => 'admin']);
     }
 
-    // Giriş prosesi
-    public function login(Request $request)
+    public function adminLogin(Request $request)
     {
         $credentials = $request->validate([
             'email' => 'required|email',
             'password' => 'required',
         ]);
 
-        // "Remember me" (Məni xatırla) funksiyası
-        $remember = $request->has('remember');
+        if (Auth::attempt($credentials, $request->has('remember'))) {
+            $user = Auth::user();
 
-        if (Auth::attempt($credentials, $remember)) {
-            $request->session()->regenerate();
-
-            // Uğurlu giriş
-            return redirect()->route('dashboard')->with('success', 'Xoş gəldiniz, ' . Auth::user()->name);
+            // Rol yoxlanışı (Admin olmalıdır)
+            if ($user->role && $user->role->name === 'admin') {
+                $request->session()->regenerate();
+                return redirect()->route('dashboard')->with('success', 'Xoş gəldiniz, Admin!');
+            } else {
+                Auth::logout();
+                return back()->withErrors(['email' => 'Bu giriş yalnız İdarəçilər üçündür.']);
+            }
         }
 
-        // Uğursuz giriş
-        return back()->withErrors([
-            'email' => 'Daxil edilən məlumatlar yanlışdır.',
-        ])->onlyInput('email');
+        return back()->withErrors(['email' => 'Email və ya şifrə yanlışdır.'])->onlyInput('email');
     }
 
-    // Çıxış prosesi
+    // ==========================================
+    // 2. KASSİR (PERSONAL) GİRİŞİ
+    // ==========================================
+    public function showStaffLoginForm()
+    {
+        // Əgər artıq giriş edibsə, roluna uyğun yönləndir
+        if (Auth::check()) {
+            return $this->redirectBasedOnRole();
+        }
+        return view('auth.login', ['url' => 'staff']);
+    }
+
+    public function staffLogin(Request $request)
+    {
+        $credentials = $request->validate([
+            'email' => 'required|email',
+            'password' => 'required',
+        ]);
+
+        if (Auth::attempt($credentials, $request->has('remember'))) {
+            $user = Auth::user();
+            $request->session()->regenerate();
+
+            // Girişdən dərhal sonra roluna uyğun yönləndir
+            return $this->redirectBasedOnRole();
+        }
+
+        return back()->withErrors(['email' => 'Məlumatlar yanlışdır.'])->onlyInput('email');
+    }
+
+    // ==========================================
+    // 3. ÇIXIŞ
+    // ==========================================
     public function logout(Request $request)
     {
         Auth::logout();
         $request->session()->invalidate();
         $request->session()->regenerateToken();
 
-        return redirect()->route('login');
+        return redirect()->route('staff.login');
+    }
+
+    // ==========================================
+    // KÖMƏKÇİ: Rola görə yönləndirmə
+    // ==========================================
+    private function redirectBasedOnRole()
+    {
+        $user = Auth::user();
+
+        if ($user->role && $user->role->name === 'admin') {
+            return redirect()->route('dashboard');
+        }
+
+        // Admin deyilsə (Kassirdirsə) Kassa Seçiminə getsin
+        return redirect()->route('register.select');
     }
 }
