@@ -141,6 +141,12 @@
                                 <span x-show="sidebarOpen">İşçilər</span>
                             </a>
 
+                            <!-- Rollar (Roles) - YENİ -->
+                            <a href="{{ route('roles.index') }}" class="group flex items-center px-2 py-3 text-sm font-medium rounded-md hover:bg-gray-700 hover:text-white text-gray-300 transition-colors">
+                                <i class="fa-solid fa-user-shield mr-3 text-lg w-6 text-center"></i>
+                                <span x-show="sidebarOpen">Rollar</span>
+                            </a>
+
                             <!-- Tənzimləmələr -->
                             <div class="mt-4 pt-4 border-t border-gray-700">
                                 <div x-data="{ open: {{ request()->routeIs('settings.*') ? 'true' : 'false' }} }">

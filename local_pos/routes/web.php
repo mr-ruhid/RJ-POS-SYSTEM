@@ -4,6 +4,7 @@ use Illuminate\Support\Facades\Route;
 // Controllerləri import edirik
 use App\Http\Controllers\AuthController; // Giriş/Çıxış
 use App\Http\Controllers\UserController;
+use App\Http\Controllers\RoleController; // Rollar
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\ProductController;
 use App\Http\Controllers\CategoryController;
@@ -26,7 +27,6 @@ use App\Http\Controllers\BackupController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\SystemUpdateController;
 use App\Http\Controllers\PaymentMethodController;
-use App\Models\Role;
 
 /*
 |--------------------------------------------------------------------------
@@ -84,10 +84,10 @@ Route::middleware(['auth'])->group(function () {
     Route::post('/users', [UserController::class, 'store'])->name('users.store');
     Route::delete('/users/{user}', [UserController::class, 'destroy'])->name('users.destroy');
 
-    Route::get('/roles', function () {
-        $roles = Role::all();
-        return view('admin.roles.index', compact('roles'));
-    })->name('roles.index');
+    // Rollar (Roles)
+    Route::get('/roles', [RoleController::class, 'index'])->name('roles.index');
+    Route::post('/roles', [RoleController::class, 'store'])->name('roles.store');
+    Route::delete('/roles/{role}', [RoleController::class, 'destroy'])->name('roles.destroy');
 
 
     // --- MƏHSULLAR ---
@@ -114,7 +114,7 @@ Route::middleware(['auth'])->group(function () {
 
 
     // --- KASSA (POS) ---
-    // Qeyd: Kassir kassa seçmədən bura girə bilməməlidir (Middleware əlavə edilə bilər)
+    // Qeyd: Kassir kassa seçmədən bura girə bilməməlidir
     Route::get('/pos', [PosController::class, 'index'])->name('pos.index');
     Route::get('/pos/search', [PosController::class, 'search'])->name('pos.search');
     Route::get('/pos/check-promo', [PosController::class, 'checkPromo'])->name('pos.check_promo');
@@ -135,7 +135,7 @@ Route::middleware(['auth'])->group(function () {
     Route::resource('promocodes', PromocodeController::class)->only(['index', 'store', 'destroy']);
 
 
-    // --- PARTNYORLAR ---
+    // --- PARTNYORLAR (TELEGRAM İNTEQRASİYASI) ---
     Route::get('/partners', [PartnerController::class, 'index'])->name('partners.index');
     Route::get('/partners/fetch-telegram', [PartnerController::class, 'fetchTelegramRequests'])->name('partners.fetch_telegram');
     Route::post('/partners/create-from-telegram', [PartnerController::class, 'createFromTelegram'])->name('partners.create_from_telegram');

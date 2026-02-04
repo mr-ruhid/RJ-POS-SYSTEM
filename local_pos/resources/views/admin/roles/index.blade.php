@@ -1,103 +1,113 @@
 @extends('layouts.admin')
 
 @section('content')
-    <!-- Başlıq və Əlavə Et Düyməsi -->
-    <div class="flex flex-col md:flex-row justify-between items-center mb-6">
+<div class="container mx-auto px-4 py-6">
+
+    <div class="flex justify-between items-center mb-6">
         <div>
             <h1 class="text-2xl font-bold text-gray-800">Rollar və İcazələr</h1>
-            <p class="text-sm text-gray-500 mt-1">Sistemdəki istifadəçi rollarını idarə edin</p>
+            <p class="text-sm text-gray-500">Sistemdəki istifadəçi vəzifələri</p>
         </div>
-        <button class="mt-4 md:mt-0 bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition shadow-md flex items-center">
-            <i class="fa-solid fa-shield-halved mr-2"></i> Yeni Rol Yarat
-        </button>
     </div>
 
-    <!-- Rollar Cədvəli -->
-    <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-        <div class="overflow-x-auto">
-            <table class="w-full text-left border-collapse">
-                <thead class="bg-gray-50 border-b border-gray-200">
-                    <tr>
-                        <th class="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Rol Adı</th>
-                        <th class="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">Kod (Slug)</th>
-                        <th class="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider">İcazələr</th>
-                        <th class="px-6 py-4 text-xs font-semibold text-gray-500 uppercase tracking-wider text-right">Əməliyyat</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-gray-100">
+    @if(session('success'))
+        <div class="bg-green-100 text-green-700 p-4 rounded-lg mb-6 border-l-4 border-green-500 shadow-sm flex items-center">
+            <i class="fa-solid fa-check-circle mr-2"></i> {{ session('success') }}
+        </div>
+    @endif
+    @if(session('error'))
+        <div class="bg-red-100 text-red-700 p-4 rounded-lg mb-6 border-l-4 border-red-500 shadow-sm flex items-center">
+            <i class="fa-solid fa-circle-exclamation mr-2"></i> {{ session('error') }}
+        </div>
+    @endif
+    @if($errors->any())
+        <div class="bg-red-50 text-red-700 p-4 rounded-lg mb-6 text-sm">
+            <ul class="list-disc pl-5">
+                @foreach ($errors->all() as $error)
+                    <li>{{ $error }}</li>
+                @endforeach
+            </ul>
+        </div>
+    @endif
 
-                    {{-- PHP Kodu ilə Rolları Dövr edirik (Məlumat bazadan gələcək) --}}
-                    @forelse($roles as $role)
-                        <tr class="hover:bg-gray-50 transition duration-150">
-                            <!-- Rol Adı -->
-                            <td class="px-6 py-4 whitespace-nowrap">
-                                <div class="flex items-center">
-                                    <div class="flex-shrink-0 h-10 w-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-lg">
-                                        {{ substr($role->name, 0, 1) }}
-                                    </div>
-                                    <div class="ml-4">
-                                        <div class="text-sm font-medium text-gray-900">{{ $role->name }}</div>
-                                        <div class="text-xs text-gray-500">{{ $role->users_count ?? 0 }} istifadəçi</div>
-                                    </div>
-                                </div>
-                            </td>
+    <div class="flex flex-col md:flex-row gap-6">
 
-                            <!-- Slug -->
-                            <td class="px-6 py-4 whitespace-nowrap">
-                                <span class="px-2.5 py-0.5 rounded-md text-xs font-medium bg-gray-100 text-gray-800 border border-gray-200 font-mono">
-                                    {{ $role->slug }}
-                                </span>
-                            </td>
-
-                            <!-- İcazələr -->
-                            <td class="px-6 py-4">
-                                <div class="flex flex-wrap gap-2">
-                                    @php
-                                        // JSON-u array-ə çeviririk (Modeldə cast etməsəydik)
-                                        $perms = is_array($role->permissions) ? $role->permissions : json_decode($role->permissions, true);
-                                    @endphp
-
-                                    @if(isset($perms['all']) && $perms['all'])
-                                        <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800 border border-purple-200">
-                                            <i class="fa-solid fa-star mr-1 text-[10px]"></i> Tam İcazə (Super Admin)
-                                        </span>
-                                    @else
-                                        @foreach($perms as $key => $value)
-                                            @if($value)
-                                                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-50 text-blue-700 border border-blue-100">
-                                                    {{ str_replace('.', ' ', ucfirst($key)) }}
-                                                </span>
-                                            @endif
-                                        @endforeach
-                                    @endif
-                                </div>
-                            </td>
-
-                            <!-- Düymələr -->
-                            <td class="px-6 py-4 text-right text-sm font-medium">
-                                @if($role->slug !== 'super_admin')
-                                    <button class="text-blue-600 hover:text-blue-900 mr-3" title="Düzəliş et">
-                                        <i class="fa-regular fa-pen-to-square"></i>
-                                    </button>
-                                    <button class="text-red-600 hover:text-red-900" title="Sil">
-                                        <i class="fa-regular fa-trash-can"></i>
-                                    </button>
-                                @else
-                                    <span class="text-xs text-gray-400 italic">Toxunulmaz</span>
-                                @endif
-                            </td>
-                        </tr>
-                    @empty
+        <!-- SOL TƏRƏF: Rol Siyahısı -->
+        <div class="w-full md:w-2/3">
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                <div class="p-4 border-b border-gray-100 bg-gray-50">
+                    <h3 class="font-bold text-gray-700">Mövcud Rollar</h3>
+                </div>
+                <table class="w-full text-left">
+                    <thead class="bg-gray-50 text-gray-600 uppercase text-xs font-semibold">
                         <tr>
-                            <td colspan="4" class="px-6 py-10 text-center text-gray-500">
-                                <i class="fa-solid fa-folder-open text-4xl mb-3 text-gray-300"></i>
-                                <p>Hələ heç bir rol tapılmadı.</p>
-                            </td>
+                            <th class="px-6 py-4">ID</th>
+                            <th class="px-6 py-4">Rol Adı</th>
+                            <th class="px-6 py-4">Slug (Kod)</th>
+                            <th class="px-6 py-4 text-right">Əməliyyat</th>
                         </tr>
-                    @endforelse
-
-                </tbody>
-            </table>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100 text-sm">
+                        @foreach($roles as $role)
+                            <tr class="hover:bg-gray-50 transition">
+                                <td class="px-6 py-4 text-gray-500">#{{ $role->id }}</td>
+                                <td class="px-6 py-4 font-bold text-gray-800">
+                                    {{ ucfirst($role->name) }}
+                                    @if(in_array($role->slug, ['admin', 'cashier']))
+                                        <span class="ml-2 bg-blue-100 text-blue-700 text-[10px] px-2 py-0.5 rounded border border-blue-200">Sistem</span>
+                                    @endif
+                                </td>
+                                <td class="px-6 py-4 font-mono text-gray-500">{{ $role->slug }}</td>
+                                <td class="px-6 py-4 text-right">
+                                    @if(!in_array($role->slug, ['admin', 'cashier']))
+                                        <form action="{{ route('roles.destroy', $role->id) }}" method="POST" onsubmit="return confirm('Bu rolu silmək istədiyinizə əminsiniz?');">
+                                            @csrf
+                                            @method('DELETE')
+                                            <button type="submit" class="text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 p-2 rounded transition" title="Sil">
+                                                <i class="fa-solid fa-trash"></i>
+                                            </button>
+                                        </form>
+                                    @else
+                                        <span class="text-gray-300 italic text-xs"><i class="fa-solid fa-lock"></i> Qorunur</span>
+                                    @endif
+                                </td>
+                            </tr>
+                        @endforeach
+                    </tbody>
+                </table>
+            </div>
         </div>
+
+        <!-- SAĞ TƏRƏF: Yeni Rol Forması -->
+        <div class="w-full md:w-1/3">
+            <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 sticky top-6">
+                <h2 class="text-lg font-bold text-gray-800 mb-4 flex items-center">
+                    <i class="fa-solid fa-plus-circle mr-2 text-blue-600"></i> Yeni Rol
+                </h2>
+
+                <form action="{{ route('roles.store') }}" method="POST">
+                    @csrf
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Rol Adı</label>
+                            <input type="text" name="name" required placeholder="Məs: Anbar Müdiri"
+                                   class="w-full rounded-lg border-gray-300 focus:ring-blue-500 focus:border-blue-500 shadow-sm p-2.5 border">
+                            <p class="text-xs text-gray-500 mt-1">Sistemdə istifadə olunacaq vəzifə adı.</p>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-lg mt-6 shadow-md transition transform active:scale-95 flex items-center justify-center">
+                        <i class="fa-solid fa-save mr-2"></i> Yadda Saxla
+                    </button>
+                </form>
+
+                <div class="mt-6 p-4 bg-yellow-50 rounded-lg border border-yellow-100 text-sm text-yellow-800">
+                    <p class="font-bold mb-1"><i class="fa-solid fa-lightbulb mr-1"></i> Məlumat</p>
+                    Yeni yaratdığınız rolları "İstifadəçilər" bölməsində işçilərə təyin edə bilərsiniz.
+                </div>
+            </div>
+        </div>
+
     </div>
+</div>
 @endsection

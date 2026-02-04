@@ -2,19 +2,15 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
 class Role extends Model
 {
-    // Bütün sahələrin doldurulmasına icazə veririk
-    protected $guarded = [];
+    use HasFactory;
 
-    // JSON olan permissions sütununu avtomatik array-ə çevirir
-    protected $casts = [
-        'permissions' => 'array',
-    ];
+    protected $fillable = ['name', 'slug', 'permissions'];
 
-    // Bir rolun çoxlu istifadəçisi ola bilər
     public function users()
     {
         return $this->hasMany(User::class);

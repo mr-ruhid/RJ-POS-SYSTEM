@@ -21,8 +21,8 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
-        'role_id', // Bunu əlavə etdik ki, rol təyin edə bilək
-        'is_active',
+        'role_id', // Role ID əlavə edildi
+        'is_active'
     ];
 
     /**
@@ -43,33 +43,21 @@ class User extends Authenticatable
     protected $casts = [
         'email_verified_at' => 'datetime',
         'password' => 'hashed',
-        'is_active' => 'boolean',
     ];
 
-    // İstifadəçinin Rolu (User -> Role)
+    /**
+     * İstifadəçinin Rolu (Vəzifəsi)
+     */
     public function role()
     {
         return $this->belongsTo(Role::class);
     }
 
-    // Köməkçi funksiya: İstifadəçinin rolunu yoxlamaq üçün
-    // Məsələn: $user->hasRole('admin')
-    public function hasRole($slug)
+    /**
+     * İstifadəçinin Satışları
+     */
+    public function orders()
     {
-        return $this->role && $this->role->slug === $slug;
-    }
-
-    // Köməkçi funksiya: İcazəni yoxlamaq üçün
-    // Məsələn: $user->hasPermission('products.create')
-    public function hasPermission($permission)
-    {
-        if (!$this->role) return false;
-
-        $permissions = $this->role->permissions ?? [];
-
-        // Əgər 'all' icazəsi varsa (Super Admin)
-        if (!empty($permissions['all'])) return true;
-
-        return !empty($permissions[$permission]);
+        return $this->hasMany(Order::class);
     }
 }
