@@ -4,76 +4,61 @@ namespace App\Http\Controllers;
 
 use App\Models\User;
 use App\Models\Role;
-use App\Models\CashRegister; // <--- Kassalar Modelini Əlavə Etdik
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Auth;
 
 class UserController extends Controller
 {
-    // 1. Adminlərin Siyahısı (İdarəçilər)
-    public function admins()
+    // İstifadəçilərin Siyahısı (Yalnız Admin və ya Səlahiyyətli şəxslər görə bilər)
+    public function index()
     {
-        // Rolu 'super_admin' və ya 'admin' olanları gətiririk
-        $users = User::whereHas('role', function($q) {
-            $q->whereIn('slug', ['super_admin', 'admin']);
-        })->with('role')->latest()->paginate(10);
+        // Cari istifadəçini yoxlayırıq
+        if (Auth::user()->role && Auth::user()->role->name !== 'admin') {
+            return redirect()->route('dashboard')->with('error', 'Bu səhifəyə giriş icazəniz yoxdur.');
+        }
 
-        // Yeni əlavə etmək üçün rollar (yalnız admin rolu görünür)
-        $roles = Role::where('slug', 'admin')->get();
+        $users = User::with('role')->latest()->get();
+        $roles = Role::all(); // Rolları (Admin, Kassir) gətiririk
 
-        return view('admin.users.admins', compact('users', 'roles'));
+        return view('admin.users.index', compact('users', 'roles'));
     }
 
-    // 2. Kassirlərin Siyahısı
-    public function cashiers()
-    {
-        // Rolu 'kassa' olanları gətiririk
-        $users = User::whereHas('role', function($q) {
-            $q->where('slug', 'kassa');
-        })->with('role')->latest()->paginate(10);
-
-        // Yeni əlavə etmək üçün 'kassa' rolunu tapırıq
-        $kassaRole = Role::where('slug', 'kassa')->first();
-
-        // Kassaları gətiririk ki, seçim etmək olsun (YENİ)
-        $cashRegisters = CashRegister::where('is_active', true)->get();
-
-        return view('admin.users.cashiers', compact('users', 'kassaRole', 'cashRegisters'));
-    }
-
-    // Yeni İstifadəçi Yarat (Həm admin, həm kassir üçün ortaqdır)
+    // Yeni İstifadəçi Yaratmaq (Yalnız Admin)
     public function store(Request $request)
     {
+        // 1. İcazə Yoxlanışı
+        if (Auth::user()->role->name !== 'admin') {
+            return back()->with('error', 'Yalnız Admin yeni işçi əlavə edə bilər!');
+        }
+
+        // 2. Validasiya
         $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email',
-            'password' => 'required|min:6',
+            'password' => 'required|string|min:6',
             'role_id' => 'required|exists:roles,id',
-            'cash_register_id' => 'nullable|exists:cash_registers,id', // Kassa ID-si validasiyası
         ]);
 
+        // 3. Yaratma
         User::create([
             'name' => $request->name,
             'email' => $request->email,
-            'password' => Hash::make($request->password),
+            'password' => Hash::make($request->password), // Şifrəni şifrələyirik
             'role_id' => $request->role_id,
-            'cash_register_id' => $request->cash_register_id, // Kassa təyini (əgər varsa)
-            'is_active' => true,
         ]);
 
-        return back()->with('success', 'Yeni istifadəçi əlavə edildi!');
+        return back()->with('success', 'Yeni istifadəçi uğurla yaradıldı.');
     }
 
-    // İstifadəçini Sil
+    // İstifadəçini Silmək
     public function destroy(User $user)
     {
-        // Super Admin silinə bilməz
-        if ($user->role && $user->role->slug === 'super_admin') {
-            return back()->with('error', 'Super Admin silinə bilməz!');
+        if (Auth::user()->role->name !== 'admin') {
+            return back()->with('error', 'Silmək üçün icazəniz yoxdur.');
         }
 
-        // Özünü silə bilməz
-        if ($user->id === auth()->id()) {
+        if ($user->id === Auth::id()) {
             return back()->with('error', 'Öz hesabınızı silə bilməzsiniz!');
         }
 
