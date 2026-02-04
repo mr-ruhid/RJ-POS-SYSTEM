@@ -16,8 +16,12 @@ const server = http.createServer(app);
 
 // SERVER TƏRƏFİ SOCKET AYARLARI
 const io = new Server(server, { 
-    cors: { origin: "*" },
-    path: '/socket.io'
+    cors: { 
+        origin: "*", // Hər yerdən gələn sorğuya icazə ver
+        methods: ["GET", "POST"],
+        credentials: true
+    },
+    path: '/socket.io' // Nginx bu yolu daxilə ötürür
 });
 
 app.set('trust proxy', 1);
@@ -45,6 +49,7 @@ const loginHTML = `
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Giriş - RJ POS</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
 <body class="bg-slate-900 h-screen flex items-center justify-center">
     <form action="login" method="POST" class="bg-slate-800 p-8 rounded-xl w-96 border border-slate-700 shadow-2xl">
@@ -58,7 +63,7 @@ const loginHTML = `
 `;
 
 // ==========================================
-// 2. DASHBOARD SƏHİFƏSİ
+// 2. DASHBOARD SƏHİFƏSİ (DÜZƏLDİLMİŞ)
 // ==========================================
 const dashboardHTML = `
 <!DOCTYPE html>
@@ -136,10 +141,12 @@ const dashboardHTML = `
     </div>
 
     <script>
-        // [VACİB] Socket Yolu: Nginx-dəki '/monitor/socket.io/' yoluna uyğun
+        // [DÜZƏLİŞ] 'transports' parametrini sildim, sistem özü avtomatik seçsin (Polling -> Websocket)
+        // 'reconnection' əlavə edildi
         const socket = io({ 
             path: '/monitor/socket.io',
-            transports: ['websocket', 'polling'] 
+            reconnection: true,
+            reconnectionAttempts: 10
         });
         
         let currentPayload = null;
@@ -160,11 +167,11 @@ const dashboardHTML = `
         socket.on('connect', () => { 
             document.getElementById('status').innerText = '● Online'; 
             document.getElementById('status').className = 'text-center text-xs text-green-500 font-bold mb-2';
-            log('Serverə qoşuldu. ID: ' + socket.id);
+            log('Serverə uğurla qoşuldu. ID: ' + socket.id);
         });
         
         socket.on('connect_error', (err) => {
-            log('Qoşulma Xətası: ' + err);
+            log('Qoşulma Xətası: ' + err.message);
             document.getElementById('status').innerText = '● Xəta'; 
             document.getElementById('status').className = 'text-center text-xs text-red-500 font-bold mb-2';
         });
