@@ -15,7 +15,7 @@ use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
-use App\Services\SyncService; // SyncService əlavə edildi
+use App\Services\SyncService;
 
 class PosController extends Controller
 {
@@ -29,7 +29,6 @@ class PosController extends Controller
             ->latest()
             ->get()
             ->map(function($product) {
-                // Stok cəmini hesablayırıq
                 $product->store_stock = $product->batches->sum('current_quantity');
                 return $product;
             });
@@ -112,8 +111,6 @@ class PosController extends Controller
         if (!$promo) return response()->json(['valid' => false, 'message' => 'Promokod tapılmadı']);
         if (!$promo->is_active) return response()->json(['valid' => false, 'message' => 'Bu promokod aktiv deyil']);
         if ($promo->expires_at && Carbon::parse($promo->expires_at)->isPast()) return response()->json(['valid' => false, 'message' => 'Promokodun vaxtı bitib']);
-
-        // [DÜZƏLİŞ] used_count sütunu istifadə olunur
         if ($promo->usage_limit && $promo->used_count >= $promo->usage_limit) return response()->json(['valid' => false, 'message' => 'Promokod limiti dolub']);
 
         // Endirim hesablanması
@@ -134,7 +131,6 @@ class PosController extends Controller
     }
 
     // 4. Satışı Tamamla
-    // [VACİB] SyncService inject edilir
     public function store(Request $request, SyncService $syncService)
     {
         $request->validate([
@@ -238,7 +234,7 @@ class PosController extends Controller
                 $totalCost += $itemCostForReport;
             }
 
-            // --- PROMOKOD VƏ KOMİSSİYA ---
+            // PROMOKOD VƏ KOMİSSİYA
             $promoDiscount = 0;
             $promoId = null;
             $promoCodeStr = null;
@@ -297,7 +293,7 @@ class PosController extends Controller
                 'total_tax' => $totalTax,
                 'grand_total' => $finalGrandTotal,
                 'total_cost' => $totalCost,
-                'total_commission' => $totalCommission, // Komissiyanı yazırıq
+                'total_commission' => $totalCommission,
                 'change_amount' => ($request->paid_amount ?? 0) - $finalGrandTotal,
                 'promo_code' => $promoCodeStr,
                 'promocode_id' => $promoId
@@ -305,14 +301,20 @@ class PosController extends Controller
 
             DB::commit();
 
-            // [YENİ] ANLIQ TELEGRAM BİLDİRİŞİ GÖNDƏR
-            // (try-catch içində ki, xəta olarsa satış dayanmasın)
+            // [YENİ] AVTO-SİNXRONİZASİYA (Satış bitən kimi)
+            // Həm Telegrama, həm də Monitora məlumat gedir.
             try {
+                // 1. Telegram Bildirişi (Əgər promokod varsa)
                 if ($promoCodeStr) {
                     $syncService->sendSaleNotification($order);
                 }
+
+                // 2. [VACİB] Tam Monitor Yeniləməsi
+                // Bu funksiya stokları, statistikanı və satış siyahısını serverə yenidən atır
+                $syncService->pushData();
+
             } catch (\Exception $e) {
-                Log::error("Telegram Notify Error: " . $e->getMessage());
+                Log::error("Auto-Sync Error: " . $e->getMessage());
             }
 
             return response()->json([
