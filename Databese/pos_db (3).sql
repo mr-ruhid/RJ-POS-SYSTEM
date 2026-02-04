@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Feb 03, 2026 at 02:21 PM
+-- Generation Time: Feb 04, 2026 at 04:39 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -62,6 +62,13 @@ CREATE TABLE `cash_registers` (
   `created_at` timestamp NULL DEFAULT NULL,
   `updated_at` timestamp NULL DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `cash_registers`
+--
+
+INSERT INTO `cash_registers` (`id`, `name`, `code`, `ip_address`, `balance`, `status`, `is_active`, `created_at`, `updated_at`) VALUES
+(1, 'Kassa 1', 'pos-1', NULL, 0.00, 'closed', 1, '2026-02-04 04:01:45', '2026-02-04 04:01:45');
 
 -- --------------------------------------------------------
 
@@ -171,7 +178,8 @@ INSERT INTO `migrations` (`id`, `migration`, `batch`) VALUES
 (43, '2026_01_29_144839_create_payment_methods_table', 3),
 (44, '2026_01_30_105910_add_location_to_product_batches', 3),
 (45, '2026_01_30_111332_add_location_to_product_batches', 3),
-(46, '2026_02_02_185537_create_personal_access_tokens_table', 3);
+(46, '2026_02_02_185537_create_personal_access_tokens_table', 3),
+(47, '2026_02_03_160936_add_commission_rate_to_partners', 4);
 
 -- --------------------------------------------------------
 
@@ -207,11 +215,10 @@ CREATE TABLE `orders` (
 --
 
 INSERT INTO `orders` (`id`, `user_id`, `cash_register_id`, `receipt_code`, `lottery_code`, `promo_code`, `promocode_id`, `subtotal`, `total_discount`, `total_tax`, `grand_total`, `refunded_amount`, `total_cost`, `total_commission`, `paid_amount`, `change_amount`, `payment_method`, `status`, `created_at`, `updated_at`) VALUES
-('019c2383-8828-715d-b41f-95915a751673', 1, NULL, 'OQBAPTGY', '4205', NULL, NULL, 15.00, 0.00, 0.90, 15.00, 0.00, 5.00, 0.00, 15.00, 0.00, 'cash', 'completed', '2026-02-03 08:39:08', '2026-02-03 08:39:08'),
-('019c2391-8f55-7221-95d9-daa929f4ba47', 1, NULL, 'UZHGZVM6', '9155', NULL, NULL, 15.00, 0.00, 0.90, 0.00, 0.00, 5.90, 0.00, 0.00, 0.00, 'cash', 'completed', '2026-02-03 08:54:27', '2026-02-03 08:54:27'),
-('019c2394-34a2-7114-9c89-2feabad91090', 1, NULL, 'PPJAVCEO', '5317', NULL, NULL, 15.00, 0.00, 0.90, 15.00, 0.00, 5.00, 0.00, 15.00, 0.00, 'cash', 'completed', '2026-02-03 08:57:21', '2026-02-03 08:57:21'),
-('019c23a4-440c-72b3-9f65-6ab8d070a465', 1, NULL, 'I0L4BVXF', '4479', NULL, NULL, 15.00, 1.50, 0.90, 13.50, 0.00, 5.00, 0.00, 13.50, 0.00, 'cash', 'completed', '2026-02-03 09:14:53', '2026-02-03 09:14:53'),
-('019c23a8-b7bb-712f-88bf-589aefc7f07f', 1, NULL, 'YSSZIJMV', '5710', NULL, NULL, 15.00, 1.00, 0.90, 14.00, 0.00, 5.00, 0.00, 14.00, 0.00, 'cash', 'completed', '2026-02-03 09:19:45', '2026-02-03 09:19:45');
+('019c2919-41da-715b-8d60-9e24c6bdc655', 1, NULL, 'PGLXKTFN', '48553', 'TEST', 5, 150.00, 24.00, 10.80, 126.00, 81.00, 90.00, 6.30, 126.00, 0.00, 'cash', 'completed', '2026-02-04 10:40:47', '2026-02-04 10:46:09'),
+('019c291e-6d24-715c-a76e-26a05332a884', 1, NULL, 'TETTCIVY', '40992', 'TEST', 5, 150.00, 24.00, 10.80, 126.00, 0.00, 90.00, 6.30, 126.00, 0.00, 'cash', 'completed', '2026-02-04 10:46:25', '2026-02-04 10:46:25'),
+('019c2948-5287-7198-8143-ec9124b21283', 1, NULL, 'ZJMGO6EZ', '73803', 'TEST', 5, 150.00, 24.00, 10.80, 126.00, 0.00, 90.00, 6.30, 126.00, 0.00, 'cash', 'completed', '2026-02-04 11:32:11', '2026-02-04 11:32:11'),
+('019c294b-2e48-70ed-b64d-492287deb1ec', 1, NULL, 'WAQFDJVL', '57391', 'TEST', 5, 150.00, 24.00, 10.80, 126.00, 0.00, 90.00, 6.30, 126.00, 0.00, 'cash', 'completed', '2026-02-04 11:35:18', '2026-02-04 11:35:18');
 
 -- --------------------------------------------------------
 
@@ -242,11 +249,14 @@ CREATE TABLE `order_items` (
 --
 
 INSERT INTO `order_items` (`id`, `order_id`, `product_id`, `product_name`, `product_barcode`, `quantity`, `is_gift`, `returned_quantity`, `price`, `cost`, `tax_amount`, `discount_amount`, `total`, `created_at`, `updated_at`) VALUES
-(1, '019c2383-8828-715d-b41f-95915a751673', '019c2381-6e94-72e7-931b-a884ffac997b', 'Test Server 1', '1', 1, 0, 0, 15.00, 5.00, 0.90, 0.00, 15.00, '2026-02-03 08:39:08', '2026-02-03 08:39:08'),
-(2, '019c2391-8f55-7221-95d9-daa929f4ba47', '019c2381-6e94-72e7-931b-a884ffac997b', 'Test Server 1', '1', 1, 0, 0, 0.00, 5.00, 0.90, 0.00, 0.00, '2026-02-03 08:54:27', '2026-02-03 08:54:27'),
-(3, '019c2394-34a2-7114-9c89-2feabad91090', '019c2381-6e94-72e7-931b-a884ffac997b', 'Test Server 1', '1', 1, 0, 0, 15.00, 5.00, 0.90, 0.00, 15.00, '2026-02-03 08:57:21', '2026-02-03 08:57:21'),
-(5, '019c23a4-440c-72b3-9f65-6ab8d070a465', '019c2381-6e94-72e7-931b-a884ffac997b', 'Test Server 1', '1', 1, 0, 0, 15.00, 5.00, 0.90, 0.00, 15.00, '2026-02-03 09:14:53', '2026-02-03 09:14:53'),
-(6, '019c23a8-b7bb-712f-88bf-589aefc7f07f', '019c2381-6e94-72e7-931b-a884ffac997b', 'Test Server 1', '1', 1, 0, 0, 15.00, 5.00, 0.90, 1.00, 14.00, '2026-02-03 09:19:45', '2026-02-03 09:19:45');
+(62, '019c2919-41da-715b-8d60-9e24c6bdc655', '019c28d4-c452-71c8-b99c-860d7e2fe7ca', 'Klaviatura', '2', 1, 0, 1, 100.00, 60.00, 10.80, 10.00, 90.00, '2026-02-04 10:40:47', '2026-02-04 10:46:09'),
+(63, '019c2919-41da-715b-8d60-9e24c6bdc655', '019c28d4-8251-72ce-a539-8180233e819d', 'Qulaqlıq', '1', 1, 0, 0, 50.00, 30.00, 0.00, 0.00, 50.00, '2026-02-04 10:40:47', '2026-02-04 10:40:47'),
+(64, '019c291e-6d24-715c-a76e-26a05332a884', '019c28d4-c452-71c8-b99c-860d7e2fe7ca', 'Klaviatura', '2', 1, 0, 0, 100.00, 60.00, 10.80, 10.00, 90.00, '2026-02-04 10:46:25', '2026-02-04 10:46:25'),
+(65, '019c291e-6d24-715c-a76e-26a05332a884', '019c28d4-8251-72ce-a539-8180233e819d', 'Qulaqlıq', '1', 1, 0, 0, 50.00, 30.00, 0.00, 0.00, 50.00, '2026-02-04 10:46:25', '2026-02-04 10:46:25'),
+(66, '019c2948-5287-7198-8143-ec9124b21283', '019c28d4-c452-71c8-b99c-860d7e2fe7ca', 'Klaviatura', '2', 1, 0, 0, 100.00, 60.00, 10.80, 10.00, 90.00, '2026-02-04 11:32:11', '2026-02-04 11:32:11'),
+(67, '019c2948-5287-7198-8143-ec9124b21283', '019c28d4-8251-72ce-a539-8180233e819d', 'Qulaqlıq', '1', 1, 0, 0, 50.00, 30.00, 0.00, 0.00, 50.00, '2026-02-04 11:32:11', '2026-02-04 11:32:11'),
+(68, '019c294b-2e48-70ed-b64d-492287deb1ec', '019c28d4-c452-71c8-b99c-860d7e2fe7ca', 'Klaviatura', '2', 1, 0, 0, 100.00, 60.00, 10.80, 10.00, 90.00, '2026-02-04 11:35:18', '2026-02-04 11:35:18'),
+(69, '019c294b-2e48-70ed-b64d-492287deb1ec', '019c28d4-8251-72ce-a539-8180233e819d', 'Qulaqlıq', '1', 1, 0, 0, 50.00, 30.00, 0.00, 0.00, 50.00, '2026-02-04 11:35:18', '2026-02-04 11:35:18');
 
 -- --------------------------------------------------------
 
@@ -259,11 +269,20 @@ CREATE TABLE `partners` (
   `name` varchar(255) NOT NULL,
   `phone` varchar(255) DEFAULT NULL,
   `telegram_chat_id` varchar(255) DEFAULT NULL,
+  `commission_percent` decimal(5,2) DEFAULT 0.00,
   `balance` decimal(10,2) NOT NULL DEFAULT 0.00,
+  `commission_rate` decimal(5,2) NOT NULL DEFAULT 10.00 COMMENT 'Komissiya faizi (%)',
   `is_active` tinyint(1) NOT NULL DEFAULT 1,
   `created_at` timestamp NULL DEFAULT NULL,
   `updated_at` timestamp NULL DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `partners`
+--
+
+INSERT INTO `partners` (`id`, `name`, `phone`, `telegram_chat_id`, `commission_percent`, `balance`, `commission_rate`, `is_active`, `created_at`, `updated_at`) VALUES
+(4, '.', NULL, '8315661555', 5.00, 25.20, 10.00, 1, '2026-02-04 09:35:55', '2026-02-04 11:35:18');
 
 -- --------------------------------------------------------
 
@@ -353,7 +372,8 @@ CREATE TABLE `products` (
 --
 
 INSERT INTO `products` (`id`, `name`, `barcode`, `description`, `image`, `category_id`, `cost_price`, `selling_price`, `quantity`, `tax_rate`, `alert_limit`, `is_active`, `last_synced_at`, `created_at`, `updated_at`, `deleted_at`) VALUES
-('019c2381-6e94-72e7-931b-a884ffac997b', 'Test Server 1', '1', NULL, NULL, NULL, 0.00, 15.00, 0, 0.00, 5, 1, NULL, '2026-02-03 08:36:51', '2026-02-03 08:36:51', NULL);
+('019c28d4-8251-72ce-a539-8180233e819d', 'Qulaqlıq', '1', NULL, NULL, NULL, 0.00, 50.00, 0, 0.00, 5, 1, NULL, '2026-02-04 09:25:41', '2026-02-04 09:25:41', NULL),
+('019c28d4-c452-71c8-b99c-860d7e2fe7ca', 'Klaviatura', '2', NULL, NULL, NULL, 0.00, 100.00, 4, 0.00, 5, 1, NULL, '2026-02-04 09:25:58', '2026-02-04 10:46:09', NULL);
 
 -- --------------------------------------------------------
 
@@ -379,10 +399,10 @@ CREATE TABLE `product_batches` (
 --
 
 INSERT INTO `product_batches` (`id`, `product_id`, `cost_price`, `initial_quantity`, `current_quantity`, `location`, `batch_code`, `expiration_date`, `created_at`, `updated_at`) VALUES
-(1, '019c2381-6e94-72e7-931b-a884ffac997b', 5.00, 20, 15, 'store', '18% ƏDV (18.00%) | LOC:store', NULL, '2026-02-03 08:38:30', '2026-02-03 09:19:45'),
-(2, '019c2381-6e94-72e7-931b-a884ffac997b', 5.00, 20, 20, 'store', 'Vergisiz (0.00%) | LOC:store', NULL, '2026-02-03 08:38:30', '2026-02-03 08:38:48'),
-(3, '019c2381-6e94-72e7-931b-a884ffac997b', 5.00, 20, 20, 'warehouse', 'Vergisiz (0.00%) | LOC:warehouse', NULL, '2026-02-03 08:38:30', '2026-02-03 08:38:30'),
-(4, '019c2381-6e94-72e7-931b-a884ffac997b', 5.00, 20, 20, 'warehouse', '18% ƏDV (18.00%) | LOC:warehouse', NULL, '2026-02-03 08:38:30', '2026-02-03 08:38:30');
+(9, '019c28d4-c452-71c8-b99c-860d7e2fe7ca', 60.00, 10, 0, 'warehouse', '18% ƏDV (18.00%) | LOC:warehouse', NULL, '2026-02-04 09:26:34', '2026-02-04 09:27:19'),
+(10, '019c28d4-8251-72ce-a539-8180233e819d', 30.00, 10, 0, 'warehouse', 'Vergisiz (0.00%) | LOC:warehouse', NULL, '2026-02-04 09:27:04', '2026-02-04 09:27:28'),
+(11, '019c28d4-c452-71c8-b99c-860d7e2fe7ca', 60.00, 10, 5, 'store', '18% ƏDV (18.00%) | LOC:store', NULL, '2026-02-04 09:27:19', '2026-02-04 11:35:18'),
+(12, '019c28d4-8251-72ce-a539-8180233e819d', 30.00, 10, 1, 'store', 'Vergisiz (0.00%) | LOC:store', NULL, '2026-02-04 09:27:28', '2026-02-04 11:35:18');
 
 -- --------------------------------------------------------
 
@@ -407,11 +427,7 @@ CREATE TABLE `product_discounts` (
 --
 
 INSERT INTO `product_discounts` (`id`, `product_id`, `type`, `value`, `start_date`, `end_date`, `is_active`, `created_at`, `updated_at`) VALUES
-(1, '019c2381-6e94-72e7-931b-a884ffac997b', 'percent', 20.00, '2026-02-03 16:55:00', '2026-02-03 12:56:30', 0, '2026-02-03 08:55:37', '2026-02-03 08:56:30'),
-(2, '019c2381-6e94-72e7-931b-a884ffac997b', 'fixed', 0.00, '2026-02-03 16:56:00', '2026-02-03 12:56:49', 0, '2026-02-03 08:56:45', '2026-02-03 08:56:49'),
-(3, '019c2381-6e94-72e7-931b-a884ffac997b', 'percent', 5.00, '2026-02-03 16:56:00', '2026-02-03 13:18:55', 0, '2026-02-03 08:57:03', '2026-02-03 09:18:55'),
-(4, '019c2381-6e94-72e7-931b-a884ffac997b', 'fixed', 0.00, '2026-02-03 00:00:00', '2026-02-03 13:19:14', 0, '2026-02-03 09:19:10', '2026-02-03 09:19:14'),
-(5, '019c2381-6e94-72e7-931b-a884ffac997b', 'fixed', 1.00, '2026-02-02 00:00:00', '2026-02-28 23:59:59', 1, '2026-02-03 09:19:30', '2026-02-03 09:19:30');
+(6, '019c28d4-c452-71c8-b99c-860d7e2fe7ca', 'percent', 10.00, '2026-02-03 00:00:00', '2026-02-28 23:59:59', 1, '2026-02-04 09:28:02', '2026-02-04 09:28:02');
 
 -- --------------------------------------------------------
 
@@ -442,7 +458,7 @@ CREATE TABLE `promocodes` (
 --
 
 INSERT INTO `promocodes` (`id`, `code`, `type`, `partner_id`, `discount_type`, `discount_value`, `commission_type`, `commission_value`, `usage_limit`, `used_count`, `expires_at`, `is_active`, `created_at`, `updated_at`, `orders_count`) VALUES
-(1, 'YAY20', 'store', NULL, 'percent', 10.00, 'percent', 0.00, NULL, 0, '2026-02-28 00:00:00', 1, '2026-02-03 08:54:06', '2026-02-03 09:14:53', 1);
+(5, 'TEST', 'store', 4, 'percent', 10.00, 'percent', 0.00, NULL, 9, NULL, 1, '2026-02-04 09:35:55', '2026-02-04 11:35:18', 0);
 
 -- --------------------------------------------------------
 
@@ -458,6 +474,14 @@ CREATE TABLE `roles` (
   `created_at` timestamp NULL DEFAULT NULL,
   `updated_at` timestamp NULL DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `roles`
+--
+
+INSERT INTO `roles` (`id`, `name`, `slug`, `permissions`, `created_at`, `updated_at`) VALUES
+(1, 'admin', 'admin', NULL, '2026-02-04 07:59:35', '2026-02-04 07:59:35'),
+(2, 'cashier', 'cashier', '[\"pos\",\"products\",\"stocks\",\"partners\",\"reports\"]', '2026-02-04 07:59:35', '2026-02-04 04:33:45');
 
 -- --------------------------------------------------------
 
@@ -479,8 +503,7 @@ CREATE TABLE `sessions` (
 --
 
 INSERT INTO `sessions` (`id`, `user_id`, `ip_address`, `user_agent`, `payload`, `last_activity`) VALUES
-('5tD6cLMC2dzt5PR9PoM7QLTjGOYWWuG2ZPZlMz2M', NULL, '127.0.0.1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36 OPR/126.0.0.0', 'YToyOntzOjY6Il90b2tlbiI7czo0MDoiaHBLV1JieVNKVjBIOFp0bWlHdVhXQW9FZEMzVzNLUzkwNnMxZGUzNCI7czo2OiJfZmxhc2giO2E6Mjp7czozOiJvbGQiO2E6MDp7fXM6MzoibmV3IjthOjA6e319fQ==', 1770124851),
-('kxEKLqKlpp5LgU5OYREJ5BVxLfQtfQV0qkqwFj53', NULL, '127.0.0.1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', 'YTozOntzOjY6Il90b2tlbiI7czo0MDoiTWRTOVNUYnpBbmY1clZqVWVxTENGS1E0bXpJZ1lScHFFdERUbFVnYSI7czo5OiJfcHJldmlvdXMiO2E6Mjp7czozOiJ1cmwiO3M6MzY6Imh0dHA6Ly8xMjcuMC4wLjE6ODAwMC9zeXN0ZW0vdXBkYXRlcyI7czo1OiJyb3V0ZSI7czoxNDoic3lzdGVtLnVwZGF0ZXMiO31zOjY6Il9mbGFzaCI7YToyOntzOjM6Im9sZCI7YTowOnt9czozOiJuZXciO2E6MDp7fX19', 1770124861);
+('MxwIyKLFO7tcFpy9MVAo5iZKBMhP9QHwsusP7MxR', 1, '127.0.0.1', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36', 'YTo0OntzOjY6Il90b2tlbiI7czo0MDoiNmhGZzdvOWFFYU0zblk1OHlaM2RBdVNsa1hVNVAzSTRqUklvSlRYRyI7czo2OiJfZmxhc2giO2E6Mjp7czozOiJvbGQiO2E6MDp7fXM6MzoibmV3IjthOjA6e319czo5OiJfcHJldmlvdXMiO2E6Mjp7czozOiJ1cmwiO3M6Nzk6Imh0dHA6Ly8xMjcuMC4wLjE6ODAwMC9zYWxlcy8wMTljMjk0Yi0yZTQ4LTcwZWQtYjY0ZC00OTIyODdkZWIxZWMvcHJpbnQtb2ZmaWNpYWwiO3M6NToicm91dGUiO3M6MjA6InNhbGVzLnByaW50X29mZmljaWFsIjt9czo1MDoibG9naW5fd2ViXzU5YmEzNmFkZGMyYjJmOTQwMTU4MGYwMTRjN2Y1OGVhNGUzMDk4OWQiO2k6MTt9', 1770219319);
 
 -- --------------------------------------------------------
 
@@ -506,9 +529,10 @@ INSERT INTO `settings` (`id`, `key`, `value`, `created_at`, `updated_at`) VALUES
 (3, 'store_phone', '+994 50 000 00 00', '2026-02-03 07:22:26', '2026-02-03 07:22:26'),
 (4, 'receipt_footer', 'Bizi seçdiyiniz üçün təşəkkürlər!', '2026-02-03 07:22:26', '2026-02-03 07:22:26'),
 (5, 'server_api_key', 'rj_pos_g8JSLMv0k9ouVDanW1BlfUSfYN8VW1AI', '2026-02-03 07:25:20', '2026-02-03 07:25:20'),
-(6, 'system_mode', 'client', '2026-02-03 07:42:51', '2026-02-03 07:42:51'),
-(7, 'server_url', 'https://vmi3036725.contaboserver.net/monitor', '2026-02-03 07:42:51', '2026-02-03 07:42:51'),
-(8, 'client_api_key', NULL, '2026-02-03 07:42:51', '2026-02-03 07:42:51');
+(6, 'system_mode', 'client', '2026-02-03 07:42:51', '2026-02-04 08:03:54'),
+(7, 'server_url', 'https://vmi3036725.contaboserver.net/monitor', '2026-02-03 07:42:51', '2026-02-04 08:19:06'),
+(8, 'client_api_key', NULL, '2026-02-03 07:42:51', '2026-02-03 07:42:51'),
+(9, 'server_telegram_api', 'https://vmi3036725.contaboserver.net/tg-api/api/telegram-sync', '2026-02-04 05:24:28', '2026-02-04 05:32:52');
 
 -- --------------------------------------------------------
 
@@ -576,7 +600,8 @@ CREATE TABLE `users` (
 --
 
 INSERT INTO `users` (`id`, `role_id`, `name`, `email`, `is_active`, `email_verified_at`, `password`, `remember_token`, `created_at`, `updated_at`) VALUES
-(1, NULL, 'Admin', 'admin@system.local', 1, NULL, '$2y$12$l/a3UyTBr8slP4OlIwigCeJGBaL68vdhfo/YCMPVcektoSiMoUJwy', NULL, '2026-02-03 08:39:08', '2026-02-03 08:39:08');
+(1, 1, 'Admin', 'admin@system.local', 1, NULL, '$2y$12$4TnY8XMFe8KD/VjJieOYTuo8iJw4eLUXSin1n.SZO3Utvu/XlrlS.', 'Ut7ZcLhrKTvpgm2trqVpOouMxMnlE3d0SH6X65sqLPV4xSi4FyaywfWKmIeA', '2026-02-03 08:39:08', '2026-02-04 03:49:13'),
+(2, 2, 'Demo Demoyev', 'demo@demo.az', 1, NULL, '$2y$12$KWT3z6DZcaR7Ab7I0sU30uf2Eb6fL9BpeOpUkx2DmgLpmGN49AKCy', NULL, '2026-02-04 04:02:30', '2026-02-04 04:02:30');
 
 --
 -- Indexes for dumped tables
@@ -766,7 +791,7 @@ ALTER TABLE `users`
 -- AUTO_INCREMENT for table `cash_registers`
 --
 ALTER TABLE `cash_registers`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
 
 --
 -- AUTO_INCREMENT for table `categories`
@@ -790,19 +815,19 @@ ALTER TABLE `jobs`
 -- AUTO_INCREMENT for table `migrations`
 --
 ALTER TABLE `migrations`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=47;
+  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=48;
 
 --
 -- AUTO_INCREMENT for table `order_items`
 --
 ALTER TABLE `order_items`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=70;
 
 --
 -- AUTO_INCREMENT for table `partners`
 --
 ALTER TABLE `partners`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT for table `payment_methods`
@@ -820,31 +845,31 @@ ALTER TABLE `personal_access_tokens`
 -- AUTO_INCREMENT for table `product_batches`
 --
 ALTER TABLE `product_batches`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
 
 --
 -- AUTO_INCREMENT for table `product_discounts`
 --
 ALTER TABLE `product_discounts`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
 
 --
 -- AUTO_INCREMENT for table `promocodes`
 --
 ALTER TABLE `promocodes`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=6;
 
 --
 -- AUTO_INCREMENT for table `roles`
 --
 ALTER TABLE `roles`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT for table `settings`
 --
 ALTER TABLE `settings`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
 
 --
 -- AUTO_INCREMENT for table `taxes`
@@ -862,7 +887,7 @@ ALTER TABLE `telegram_partners`
 -- AUTO_INCREMENT for table `users`
 --
 ALTER TABLE `users`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
 
 --
 -- Constraints for dumped tables
