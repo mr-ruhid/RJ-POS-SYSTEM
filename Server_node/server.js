@@ -15,6 +15,8 @@ const app = express();
 const server = http.createServer(app);
 
 // SERVER TƏRƏFİ SOCKET AYARLARI
+// Node.js daxildə '/socket.io' dinləyir.
+// Nginx '/monitor/socket.io' sorğusunu bura yönləndirəndə '/monitor' hissəsini silir.
 const io = new Server(server, { 
     cors: { origin: "*" },
     path: '/socket.io'
@@ -109,7 +111,7 @@ const dashboardHTML = `
 
     <div class="content">
         <!-- Debug Log -->
-        <div id="debug-log">Sistem hazırdır...</div>
+        <div id="debug-log">Sistem işə düşür...</div>
 
         <!-- DASHBOARD -->
         <div id="page-dashboard">
@@ -137,10 +139,15 @@ const dashboardHTML = `
     </div>
 
     <script>
-        const socket = io({ path: '/socket.io', transports: ['websocket', 'polling'] });
+        // [VACİB] Client tərəfində yol '/monitor/socket.io' olmalıdır ki, Nginx tuta bilsin
+        const socket = io({ 
+            path: '/monitor/socket.io',
+            transports: ['websocket', 'polling'] 
+        });
+        
         let currentPayload = null;
 
-        // Logging
+        // Logging funksiyası
         function log(msg) {
             const el = document.getElementById('debug-log');
             el.innerText = msg;
@@ -155,15 +162,24 @@ const dashboardHTML = `
             el.classList.add('active');
         }
 
+        // --- SOCKET EVENTLƏRİ ---
+        
         socket.on('connect', () => { 
             document.getElementById('status').innerText = '● Online'; 
             document.getElementById('status').className = 'text-center text-xs text-green-500 font-bold mb-2';
-            log('Serverə qoşuldu. Məlumat gözlənilir...');
+            log('Serverə uğurla qoşuldu. Məlumat gözlənilir...');
         });
         
+        socket.on('connect_error', (err) => {
+            log('Qoşulma Xətası: ' + err);
+            document.getElementById('status').innerText = '● Xəta'; 
+            document.getElementById('status').className = 'text-center text-xs text-red-500 font-bold mb-2';
+        });
+
         socket.on('disconnect', () => { 
             document.getElementById('status').innerText = '● Offline';
             document.getElementById('status').className = 'text-center text-xs text-red-500 font-bold mb-2';
+            log('Serverdən ayrıldı.');
         });
 
         // DATA QƏBULU
@@ -262,38 +278,20 @@ app.get('/logout', (req, res) => {
     res.redirect('./'); 
 });
 
-// [API] Mağazadan Məlumat Qəbulu
+// [API] Yalnız Monitorinq Məlumatlarını Qəbul Edir
 app.post('/api/report', (req, res) => {
     try {
         const payload = req.body.payload;
-        
-        console.log(`📥 Məlumat gəldi: ${new Date().toLocaleTimeString()}`);
-        console.log(`📦 Satış sayı: ${payload.latest_orders?.length || 0}`);
-        
         currentPayload = payload;
-        
-        io.emit('live_update', { 
-            type: 'full_report', 
-            payload: payload, 
-            time: new Date().toLocaleTimeString() 
-        });
-        
-        // Burda konsolda qoşulu istifadəçi sayını göstəririk
-        console.log(`📡 Yayım edildi. (Qoşulu istifadəçi: ${io.engine.clientsCount})`);
-
+        io.emit('live_update', { type: 'full_report', payload: payload, time: new Date().toLocaleTimeString() });
         res.json({ status: true });
     } catch (e) {
-        console.error("Server API Xətası:", e);
         res.status(500).json({ status: false, error: e.message });
     }
 });
 
 io.on('connection', (socket) => {
-    console.log('⚡ Yeni bağlantı (ID: ' + socket.id + ')');
-    
-    if (currentPayload) {
-        socket.emit('live_update', { type: 'full_report', payload: currentPayload, time: new Date().toLocaleTimeString() });
-    }
+    if (currentPayload) socket.emit('live_update', { type: 'full_report', payload: currentPayload });
 });
 
-server.listen(3000, () => console.log('✅ Monitor Serveri (Port 3000) işə düşdü.'));
+server.listen(3000, () => console.log('📺 Monitor Serveri: Port 3000'));
