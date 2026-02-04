@@ -175,24 +175,6 @@ const dashboardHTML = `
         });
         
         let currentPayload = null;
-
-        function log(msg) {
-            const el = document.getElementById('debug-log');
-            el.innerText = msg;
-            console.log(msg);
-        }
-
-        function switchPage(id, el) {
-            document.querySelectorAll('[id^="page-"]').forEach(el => el.classList.add('hidden-page'));
-            document.getElementById('page-' + id).classList.remove('hidden-page');
-            document.querySelectorAll('.nav-link').forEach(el => el.classList.remove('active'));
-            el.classList.add('active');
-        }
-
-        socket.on('connect', () => { 
-            document.getElementById('status').innerText = '● Online'; 
-            document.getElementById('status').className = 'text-center text-xs text-green-500 font-bold mb-2';
-            log('Serverə qoşuldu.');
         });
         
         socket.on('disconnect', () => { 
