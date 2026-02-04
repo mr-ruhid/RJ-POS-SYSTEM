@@ -21,7 +21,7 @@ class SyncService
 
     public function __construct()
     {
-        // 1. Monitorinq Serveri (Node.js - Dashboard üçün)
+        // 1. Monitorinq Serveri (Node.js - Dashboard)
         $this->serverUrl = Setting::where('key', 'server_url')->value('value');
         if ($this->serverUrl) {
             $this->serverUrl = rtrim($this->serverUrl, '/');
@@ -33,72 +33,87 @@ class SyncService
             $this->telegramApiUrl = rtrim($this->telegramApiUrl, '/');
         }
 
-        // API Key (Təhlükəsizlik üçün)
+        // API Key
         $this->apiKey = Setting::where('key', 'client_api_key')->value('value');
     }
 
     /**
-     * [UPLOAD] Bütün Məlumatları Hər İki Ünvana Göndərir
+     * [UPLOAD] Bütün Məlumatları Hesablayır və Göndərir
      */
     public function pushData()
     {
-        // Yoxlama: Heç olmasa biri mövcud olmalıdır
         if (!$this->serverUrl && !$this->telegramApiUrl) {
             return ['status' => false, 'message' => 'Heç bir server URL (Monitor və ya Telegram) təyin edilməyib.'];
         }
 
         // --------------------------------------------------------
-        // 1. MƏLUMATLARIN TOPLANMASI (DATA COLLECTION)
+        // 1. SATIŞLARIN HAZIRLANMASI (Komissiya Hesabı ilə)
         // --------------------------------------------------------
-
-        // A. GÜNLÜK STATİSTİKA
-        $today = Carbon::today();
-        $todayStats = Order::whereDate('created_at', $today)
-            ->select(
-                DB::raw('sum(grand_total) as total_sales'),
-                DB::raw('count(*) as count_sales'),
-                DB::raw('sum(grand_total - total_cost - total_tax) as net_profit')
-            )->first();
-
-        // B. SATIŞLAR (Son 50)
-        $orders = Order::with(['items', 'user'])
+        $orders = Order::with(['items', 'user', 'promocode.partner'])
             ->orderBy('created_at', 'desc')
             ->take(50)
             ->get()
             ->map(function($order) {
+
+                // [HESABLAMA] Komissiya və Partnyorun Tapılması
+                $commissionAmount = 0;
+                $partnerId = null;
+                $partner = null;
+
+                // 1. Üsul: Əlaqə (Relationship) vasitəsilə yoxlayırıq
+                if ($order->promocode && $order->promocode->partner) {
+                    $partner = $order->promocode->partner;
+                }
+                // 2. Üsul (Ehtiyat): Əgər əlaqə qırılıbsa, kodun mətni (string) ilə tapırıq
+                elseif (!empty($order->promo_code)) {
+                    $promoObj = Promocode::where('code', $order->promo_code)->first();
+                    if ($promoObj) {
+                        $partner = Partner::find($promoObj->partner_id);
+                    }
+                }
+
+                // Əgər partnyor tapıldısa, hesablama aparırıq
+                if ($partner) {
+                    $partnerId = $partner->id;
+                    $percent = $partner->commission_percent ?? 0;
+
+                    if ($percent > 0) {
+                        // (Satış * Faiz) / 100
+                        $commissionAmount = ($order->grand_total * $percent) / 100;
+                        $commissionAmount = number_format($commissionAmount, 2, '.', ''); // Yuvarlaqlaşdırırıq
+                    }
+                }
+
                 return [
                     'id' => $order->id,
                     'receipt_code' => $order->receipt_code,
-                    'lottery_code' => $order->lottery_code,
-                    'promo_code' => $order->promo_code,
+                    'promo_code' => $order->promo_code, // Kodun özü
+                    'partner_id' => $partnerId,         // Sahibinin ID-si
+                    'calculated_commission' => $commissionAmount, // [VACİB] Hazır rəqəm
+
                     'grand_total' => $order->grand_total,
-                    'total_cost' => $order->total_cost,
                     'payment_method' => $order->payment_method,
-                    'status' => $order->status,
-                    'created_at' => $order->created_at->toDateTimeString(),
                     'time' => $order->created_at->format('H:i:s'),
-                    'user_name' => $order->user ? $order->user->name : 'Sistem',
                     'items_count' => $order->items->count(),
+                    'created_at' => $order->created_at->toDateTimeString(),
                     'items' => $order->items->toArray()
                 ];
             })->toArray();
 
-        // C. MƏHSULLAR (Tam siyahı - Stok və Qiymət yeniləməsi üçün)
+        // --------------------------------------------------------
+        // 2. DİGƏR MƏLUMATLAR
+        // --------------------------------------------------------
         $products = Product::all()->map(function($p) {
             return [
                 'id' => $p->id,
                 'name' => $p->name,
                 'barcode' => $p->barcode,
                 'selling_price' => $p->selling_price,
-                'cost_price' => $p->cost_price ?? 0,
                 'quantity' => $p->quantity ?? 0,
-                'alert_limit' => $p->alert_limit,
-                'is_active' => $p->is_active,
-                'category_id' => $p->category_id
+                'cost_price' => $p->cost_price ?? 0
             ];
         })->toArray();
 
-        // D. ANBAR PARTİYALARI
         $batches = ProductBatch::where('current_quantity', '>', 0)
             ->with('product:id,name')
             ->get()
@@ -112,19 +127,21 @@ class SyncService
                 ];
             })->toArray();
 
-        // Anbarın ümumi maya dəyəri
-        $warehouseCost = DB::table('product_batches')
-            ->where('current_quantity', '>', 0)
-            ->sum(DB::raw('current_quantity * cost_price'));
-
-        // E. PARTNYORLAR VƏ PROMOKODLAR
         $partners = class_exists(Partner::class) ? Partner::all()->toArray() : [];
         $promocodes = class_exists(Promocode::class) ? Promocode::with('partner')->get()->toArray() : [];
-        $criticalStockCount = Product::whereRaw('alert_limit > quantity')->count();
 
-        // --------------------------------------------------------
-        // 2. PAKETİN HAZIRLANMASI
-        // --------------------------------------------------------
+        // Statistika
+        $today = Carbon::today();
+        $todayStats = Order::whereDate('created_at', $today)
+            ->select(
+                DB::raw('sum(grand_total) as total_sales'),
+                DB::raw('count(*) as count_sales'),
+                DB::raw('sum(grand_total - total_cost - total_tax) as net_profit')
+            )->first();
+
+        $warehouseCost = DB::table('product_batches')->where('current_quantity', '>', 0)->sum(DB::raw('current_quantity * cost_price'));
+
+        // YEKUN PAKET
         $payload = [
             'stats' => [
                 'today_sales' => $todayStats->total_sales ?? 0,
@@ -132,7 +149,6 @@ class SyncService
                 'today_profit' => $todayStats->net_profit ?? 0,
                 'warehouse_cost' => $warehouseCost,
                 'partner_count' => count($partners),
-                'critical_stock' => $criticalStockCount
             ],
             'latest_orders' => $orders,
             'products' => $products,
@@ -142,71 +158,52 @@ class SyncService
         ];
 
         // --------------------------------------------------------
-        // 3. GÖNDƏRİŞ PROSESİ (DUAL SEND)
+        // 3. GÖNDƏRİŞ
         // --------------------------------------------------------
         $messages = [];
         $status = true;
 
-        // A. Monitora Göndər (Node.js /api/report)
+        // A. Monitora Göndər (Node.js Dashboard)
         if ($this->serverUrl) {
             try {
-                $response1 = Http::timeout(10)->post($this->serverUrl . '/api/report', [
-                    'type' => 'full_report',
-                    'payload' => $payload
-                ]);
-
-                if ($response1->successful()) {
-                    $messages[] = "Monitor OK";
-                } else {
-                    $status = false;
-                    $messages[] = "Monitor Xətası: " . $response1->status();
-                }
-            } catch (\Exception $e) {
-                $status = false;
-                $messages[] = "Monitor Bağlantı Xətası";
-            }
+                $response1 = Http::timeout(10)->post($this->serverUrl . '/api/report', ['type' => 'full_report', 'payload' => $payload]);
+                if ($response1->successful()) $messages[] = "Monitor OK";
+                else { $status = false; $messages[] = "Monitor Xəta"; }
+            } catch (\Exception $e) { $status = false; $messages[] = "Monitor Bağlantı"; }
         }
 
-        // B. Telegram API-yə Göndər (Əlavə ünvan)
+        // B. Telegram API-yə Göndər (Bot Bildirişləri)
         if ($this->telegramApiUrl) {
             try {
-                // Telegram API-yə eyni paketi göndəririk
                 $response2 = Http::timeout(10)->post($this->telegramApiUrl, [
                     'type' => 'telegram_sync',
                     'api_key' => $this->apiKey,
                     'payload' => $payload
                 ]);
 
-                if ($response2->successful()) {
-                    $messages[] = "Telegram API OK";
-                } else {
-                    // Telegram xətası əsas işi dayandırmamalıdır
-                    $messages[] = "Telegram API Xətası: " . $response2->status();
-                }
-            } catch (\Exception $e) {
-                Log::error("Telegram API Xətası: " . $e->getMessage());
-                $messages[] = "Telegram API Bağlantı Xətası";
-            }
+                if ($response2->successful()) $messages[] = "Telegram OK";
+                else $messages[] = "Telegram Xəta: " . $response2->status();
+            } catch (\Exception $e) { $messages[] = "Telegram Bağlantı"; }
         }
 
-        return [
-            'status' => $status,
-            'message' => implode(' | ', $messages)
-        ];
+        return ['status' => $status, 'message' => implode(' | ', $messages)];
     }
 
     /**
-     * [YENİLƏNİB] Partnyor yaradılanda YALNIZ TELEGRAM API-yə mesaj göndərir
+     * Partnyor yaradılanda YALNIZ TELEGRAM API-yə mesaj göndərir
      */
     public function sendPartnerWelcome($partner, $promoCode, $discountValue, $commission)
     {
-        // serverUrl (Monitor) yox, telegramApiUrl lazımdır
         if (!$this->telegramApiUrl || !$partner->telegram_chat_id) return;
 
         try {
-            // URL düzəltmə: .../telegram-sync -> .../partner-welcome
-            // Əgər istifadəçi Tənzimləmələrdə .../api/telegram-sync yazıbsa, onu dəyişirik
+            // URL düzəltmə
             $url = str_replace('/telegram-sync', '/partner-welcome', $this->telegramApiUrl);
+
+            // Əgər user tənzimləmədə sadəcə domen yazıbsa
+            if (!str_contains($url, '/api/partner-welcome')) {
+                 $url = rtrim($this->telegramApiUrl, '/') . '/api/partner-welcome';
+            }
 
             Http::timeout(5)->post($url, [
                 'api_key' => $this->apiKey,
@@ -216,16 +213,8 @@ class SyncService
                 'discount' => $discountValue,
                 'commission' => $commission
             ]);
-        } catch (\Exception $e) {
-            Log::error("Partner Welcome Error: " . $e->getMessage());
-        }
+        } catch (\Exception $e) {}
     }
 
-    /**
-     * [DOWNLOAD] Hələlik sadəcə status qaytarır
-     */
-    public function pullData()
-    {
-        return ['status' => true, 'message' => 'Monitorinq rejimi aktivdir.'];
-    }
+    public function pullData() { return ['status' => true, 'message' => 'Monitorinq rejimi aktivdir.']; }
 }

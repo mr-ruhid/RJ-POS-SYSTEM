@@ -7,7 +7,7 @@
     <div class="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
         <div>
             <h1 class="text-3xl font-bold text-gray-800">Mənfəət və Zərər</h1>
-            <p class="text-gray-500 mt-1">Seçilən tarix aralığı üzrə maliyyə nəticələri</p>
+            <p class="text-gray-500 mt-1">Geri qaytarmalar və komissiyalar nəzərə alınmaqla maliyyə nəticələri</p>
         </div>
 
         <form action="{{ route('reports.profit') }}" method="GET" class="bg-white p-2 rounded-lg shadow-sm border border-gray-200 flex items-center space-x-2">
@@ -27,22 +27,23 @@
     <!-- NƏTİCƏ KARTLARI -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
 
-        <!-- 1. Ümumi Gəlir (Satış) -->
+        <!-- 1. Xalis Satış (Net Revenue) -->
         <div class="bg-white rounded-xl shadow-sm p-6 border-t-4 border-blue-500">
-            <p class="text-xs font-bold text-gray-400 uppercase tracking-wider">Ümumi Kassa Girişi</p>
-            <h3 class="text-2xl font-bold text-gray-800 mt-2">{{ number_format($totalRevenue, 2) }} ₼</h3>
-            <p class="text-xs text-blue-600 mt-1 flex items-center">
-                <i class="fa-solid fa-circle-info mr-1"></i> Endirimlər çıxıldıqdan sonra
+            <p class="text-xs font-bold text-gray-400 uppercase tracking-wider">Xalis Satış (Qaytarmasız)</p>
+            <h3 class="text-2xl font-bold text-gray-800 mt-2">{{ number_format($netRevenue, 2) }} ₼</h3>
+            <p class="text-xs text-blue-600 mt-1 flex items-center" title="Ümumi satışdan geri qaytarmalar çıxılıb">
+                <i class="fa-solid fa-circle-info mr-1"></i> Ümumi: {{ number_format($grossRevenue, 2) }} ₼
             </p>
         </div>
 
-        <!-- 2. Maya Dəyəri + Vergi -->
+        <!-- 2. Ümumi Xərclər -->
         <div class="bg-white rounded-xl shadow-sm p-6 border-t-4 border-orange-500">
-            <p class="text-xs font-bold text-gray-400 uppercase tracking-wider">Xərclər (Maya + Vergi)</p>
-            <h3 class="text-2xl font-bold text-gray-800 mt-2">{{ number_format($totalCost + $totalTax, 2) }} ₼</h3>
-            <div class="flex items-center text-xs text-gray-500 mt-1 gap-3">
-                <span>Maya: <b>{{ number_format($totalCost, 2) }}</b></span>
-                <span>Vergi: <b>{{ number_format($totalTax, 2) }}</b></span>
+            <p class="text-xs font-bold text-gray-400 uppercase tracking-wider">Ümumi Xərclər</p>
+            <h3 class="text-2xl font-bold text-gray-800 mt-2">{{ number_format($netCost + $totalTax + $totalCommission, 2) }} ₼</h3>
+            <div class="flex items-center text-xs text-gray-500 mt-1 gap-2">
+                <span title="Malın Mayası">M: <b>{{ number_format($netCost, 2) }}</b></span> |
+                <span title="Vergi">V: <b>{{ number_format($totalTax, 2) }}</b></span> |
+                <span title="Partnyor Komissiyası">K: <b>{{ number_format($totalCommission, 2) }}</b></span>
             </div>
         </div>
 
@@ -65,34 +66,53 @@
         </h3>
 
         <div class="flex flex-col space-y-3">
-            <!-- Sətir 1: Satış -->
-            <div class="flex justify-between items-center border-b border-gray-200 pb-2">
-                <span class="text-gray-600 font-medium">Yekun Satış (Kassa)</span>
-                <span class="text-gray-800 font-bold">{{ number_format($totalRevenue, 2) }} ₼</span>
+
+            <!-- 1. GƏLİR HİSSƏSİ -->
+            <div class="flex justify-between items-center text-sm">
+                <span class="text-gray-600">Ümumi Satış (Kassa)</span>
+                <span class="text-gray-800 font-medium">{{ number_format($grossRevenue, 2) }} ₼</span>
             </div>
 
-            <!-- Sətir 2: Endirimlər (Məlumat üçün) -->
-            <div class="flex justify-between items-center border-b border-gray-200 pb-2 text-sm text-gray-500">
-                <span><i class="fa-solid fa-tag mr-1"></i> Müştəriyə edilən endirimlər (artıq çıxılıb)</span>
-                <span>{{ number_format($totalDiscount, 2) }} ₼</span>
+            <div class="flex justify-between items-center text-sm text-red-500 border-b border-gray-200 pb-2">
+                <span class="pl-2 border-l-2 border-red-300">(-) Geri Qaytarılanlar</span>
+                <span>-{{ number_format($totalRefunds, 2) }} ₼</span>
             </div>
 
-            <!-- Sətir 3: Çıxılanlar -->
-            <div class="flex justify-between items-center text-red-500">
-                <span class="font-medium pl-4 border-l-2 border-red-300">(-) Satılan Malın Maya Dəyəri</span>
-                <span class="font-bold">-{{ number_format($totalCost, 2) }} ₼</span>
-            </div>
-            <div class="flex justify-between items-center text-red-500 border-b border-gray-200 pb-2">
-                <span class="font-medium pl-4 border-l-2 border-red-300">(-) Vergi Öhdəliyi (ƏDV və s.)</span>
-                <span class="font-bold">-{{ number_format($totalTax, 2) }} ₼</span>
+            <div class="flex justify-between items-center font-bold text-gray-800 pb-2">
+                <span>= Xalis Satış</span>
+                <span>{{ number_format($netRevenue, 2) }} ₼</span>
             </div>
 
-            <!-- Yekun -->
-            <div class="flex justify-between items-center pt-2">
+            <!-- 2. XƏRC HİSSƏSİ -->
+            <div class="mt-2 space-y-2">
+                <div class="flex justify-between items-center text-sm text-red-500">
+                    <span class="pl-2 border-l-2 border-red-300">(-) Satılan Malın Mayası (Net)</span>
+                    <span>-{{ number_format($netCost, 2) }} ₼</span>
+                </div>
+
+                <div class="flex justify-between items-center text-sm text-red-500">
+                    <span class="pl-2 border-l-2 border-red-300">(-) Vergi Öhdəliyi</span>
+                    <span>-{{ number_format($totalTax, 2) }} ₼</span>
+                </div>
+
+                <!-- [YENİ] Partnyor Komissiyası -->
+                <div class="flex justify-between items-center text-sm text-red-500 border-b border-gray-200 pb-2">
+                    <span class="pl-2 border-l-2 border-red-300">(-) Partnyor Komissiyaları</span>
+                    <span>-{{ number_format($totalCommission, 2) }} ₼</span>
+                </div>
+            </div>
+
+            <!-- YEKUN -->
+            <div class="flex justify-between items-center pt-2 bg-gray-200 p-3 rounded-lg">
                 <span class="text-lg font-bold text-gray-800">Təmiz Qazanc</span>
                 <span class="text-xl font-black {{ $netProfit >= 0 ? 'text-green-600' : 'text-red-600' }}">
                     {{ number_format($netProfit, 2) }} ₼
                 </span>
+            </div>
+
+            <!-- Məlumat üçün Endirimlər (Mənfəətə təsir etmir, çünki satışdan artıq çıxılıb) -->
+            <div class="text-xs text-gray-400 text-center mt-2">
+                <i class="fa-solid fa-info-circle"></i> Bu dövrdə müştərilərə cəmi <b>{{ number_format($totalDiscount, 2) }} ₼</b> endirim edilib.
             </div>
         </div>
     </div>

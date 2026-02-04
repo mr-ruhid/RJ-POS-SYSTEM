@@ -4,15 +4,21 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Concerns\HasUuids; // 1. Bu sətri əlavə edin
 
 class Product extends Model
 {
-    use HasFactory;
+    // 2. Trait-i bura əlavə edin (HasUuids)
+    use HasFactory, HasUuids;
 
-    public $incrementing = false; // UUID üçün
+    // ID-nin rəqəm yox, string olduğunu bildiririk
+    public $incrementing = false;
     protected $keyType = 'string';
 
+    // Bütün sütunlara icazə veririk
     protected $guarded = [];
+
+    // --- ƏLAQƏLƏR ---
 
     public function category()
     {
@@ -31,7 +37,6 @@ class Product extends Model
 
     /**
      * Aktiv Endirimi Gətirən Funksiya
-     * Yalnız tarixi keçməyən və is_active=1 olan endirimi gətirir.
      */
     public function activeDiscount()
     {

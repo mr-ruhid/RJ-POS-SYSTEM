@@ -4,17 +4,23 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Concerns\HasUuids; // 1. Bu sətri əlavə edin
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
 
 class Order extends Model
 {
-    use HasFactory, HasUuids; // 2. Trait-i bura əlavə edin
+    use HasFactory, HasUuids;
 
-    // UUID istifadə etdiyimiz üçün bunları qeyd edirik
     public $incrementing = false;
     protected $keyType = 'string';
 
+    // Bütün sütunların yazılmasına icazə veririk
     protected $guarded = [];
+
+    protected $casts = [
+        'grand_total' => 'decimal:2',
+        'total_commission' => 'decimal:2',
+        'created_at' => 'datetime',
+    ];
 
     /**
      * Satışı edən istifadəçi (Kassir)
@@ -33,7 +39,8 @@ class Order extends Model
     }
 
     /**
-     * İstifadə olunan promokod
+     * [VACİB] İstifadə olunan promokod
+     * Bu əlaqə vasitəsilə partnyoru tapırıq
      */
     public function promocode()
     {

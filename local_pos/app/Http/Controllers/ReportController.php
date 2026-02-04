@@ -24,77 +24,100 @@ class ReportController extends Controller
         $backupCount = count(array_filter($backupFiles, fn($f) => str_ends_with($f, '.zip') || str_ends_with($f, '.sql')));
         $lastBackup = Setting::where('key', 'last_backup_date')->value('value');
 
-        $todaySales = Order::whereDate('created_at', Carbon::today())->sum('grand_total');
+        // Günlük Net Satış (Qaytarmalar çıxılmaqla)
+        $todaySales = Order::whereDate('created_at', Carbon::today())
+            ->sum(DB::raw('grand_total - refunded_amount'));
+
         $totalProducts = Product::count();
 
-        $criticalStockCount = Product::whereRaw('alert_limit > (select coalesce(sum(current_quantity), 0) from product_batches where product_batches.product_id = products.id)')->count();
+        // Kritik stok
+        $criticalStockCount = Product::whereColumn('quantity', '<=', 'alert_limit')->count();
 
         return view('admin.reports.index', compact('backupCount', 'lastBackup', 'todaySales', 'totalProducts', 'criticalStockCount'));
     }
 
     /**
-     * 2. MƏNFƏƏT HESABATI
+     * 2. MƏNFƏƏT HESABATI (YENİLƏNMİŞ - DƏQİQ HESABLAMA)
      */
     public function profit(Request $request)
     {
-        $startDate = $request->start_date ? Carbon::parse($request->start_date) : Carbon::now()->startOfMonth();
+        $startDate = $request->start_date ? Carbon::parse($request->start_date)->startOfDay() : Carbon::now()->startOfMonth();
         $endDate = $request->end_date ? Carbon::parse($request->end_date)->endOfDay() : Carbon::now()->endOfDay();
 
-        $orders = Order::whereBetween('created_at', [$startDate, $endDate])->get();
+        // Satışları və içindəki məhsulları gətiririk
+        $orders = Order::with('items')->whereBetween('created_at', [$startDate, $endDate])->get();
 
-        $totalRevenue = $orders->sum('grand_total');
-        $totalCost = $orders->sum('total_cost');
+        // 1. Ümumi Kassa Girişi (Brutto Satış)
+        $grossRevenue = $orders->sum('grand_total');
+
+        // 2. Geri Qaytarılan Məbləğ
+        $totalRefunds = $orders->sum('refunded_amount');
+
+        // 3. Xalis Satış (Net Revenue) - View faylında tələb olunan dəyişən
+        $netRevenue = $grossRevenue - $totalRefunds;
+
+        // 4. Maya Dəyəri Hesablaması
+        $totalCost = 0; // Satılan malların mayası
+        $totalReturnedCost = 0; // Qaytarılan malların mayası
+
+        foreach ($orders as $order) {
+            foreach ($order->items as $item) {
+                // Satılan malın mayası
+                $totalCost += ($item->cost * $item->quantity);
+
+                // Qaytarılan malın mayası (Anbara qayıtdığı üçün xərc deyil)
+                if ($item->returned_quantity > 0) {
+                    $totalReturnedCost += ($item->cost * $item->returned_quantity);
+                }
+            }
+        }
+
+        // Xalis Maya Dəyəri (Yalnız müştəridə qalan mallar)
+        $netCost = $totalCost - $totalReturnedCost;
+
+        // 5. Vergi, Endirim və Komissiya
         $totalTax = $orders->sum('total_tax');
         $totalDiscount = $orders->sum('total_discount');
+        $totalCommission = $orders->sum('total_commission');
 
-        $netProfit = $totalRevenue - $totalTax - $totalCost;
+        // 6. XALİS MƏNFƏƏT
+        // (Xalis Satış) - (Xalis Maya) - Vergi - Komissiya
+        $netProfit = $netRevenue - $netCost - $totalTax - $totalCommission;
 
         return view('admin.reports.profit', compact(
             'startDate', 'endDate',
-            'totalRevenue', 'totalCost', 'totalTax', 'totalDiscount', 'netProfit'
+            'grossRevenue', 'totalRefunds', 'netRevenue',
+            'totalCost', 'totalReturnedCost', 'netCost',
+            'totalTax', 'totalDiscount', 'totalCommission', 'netProfit'
         ));
     }
 
     /**
-     * 3. STOK HESABATI (Batch Code Regex Fix)
-     * Anbarda olan malın real dəyəri (Vergi daxil)
+     * 3. STOK HESABATI
      */
     public function stock()
     {
-        // Bütün aktiv partiyaları gətiririk (hesablama üçün)
-        // cursor() istifadə edirik ki, yaddaş dolmasın
-        $batchesCursor = ProductBatch::with('product')->where('current_quantity', '>', 0)->cursor();
+        // Product cədvəlindən ümumi dəyərləri hesablayırıq
+        $products = Product::where('quantity', '>', 0)->get();
 
         $totalCostValue = 0;
         $totalSaleValue = 0;
 
-        foreach ($batchesCursor as $batch) {
-            $qty = $batch->current_quantity;
-            $costPrice = $batch->cost_price;
+        foreach ($products as $product) {
+            $qty = $product->quantity;
+            $baseCost = $qty * $product->cost_price;
 
-            // --- VERGİ FAİZİNİ TAPMAQ ---
-            $taxRate = 0;
-            if ($batch->batch_code && preg_match('/\((\d+(?:\.\d+)?)%\)/', $batch->batch_code, $matches)) {
-                $taxRate = (float) $matches[1];
-            }
+            // Vergi dərəcəsi varsa maya dəyərini artırırıq
+            $taxCost = $baseCost * ($product->tax_rate / 100);
 
-            // 1. Maya Dəyəri (Vergi ilə birlikdə)
-            // Maya = (Say * Alış) + (Say * Alış * VergiFaizi / 100)
-            $batchBaseCost = $qty * $costPrice;
-            $batchTaxCost = $batchBaseCost * ($taxRate / 100);
-
-            $totalCostValue += ($batchBaseCost + $batchTaxCost);
-
-            // 2. Satış Dəyəri
-            if ($batch->product) {
-                $totalSaleValue += ($qty * $batch->product->selling_price);
-            }
+            $totalCostValue += ($baseCost + $taxCost);
+            $totalSaleValue += ($qty * $product->selling_price);
         }
 
-        // Gözlənilən Mənfəət
         $potentialProfit = $totalSaleValue - $totalCostValue;
 
-        // Cədvəl üçün paginasiya
+        // Cədvəl üçün ProductBatch və ya Product istifadə edə bilərik.
+        // Ətraflı məlumat üçün ProductBatch (Partiyalar) daha yaxşıdır.
         $batches = ProductBatch::with('product')
             ->where('current_quantity', '>', 0)
             ->orderBy('created_at', 'desc')
@@ -104,7 +127,7 @@ class ReportController extends Controller
     }
 
     /**
-     * 4. PARTNYOR VƏ PROMOKOD HESABATI
+     * 4. PARTNYORLAR HESABATI
      */
     public function partners()
     {
@@ -125,7 +148,7 @@ class ReportController extends Controller
      */
     public function sales(Request $request)
     {
-        $startDate = $request->start_date ? Carbon::parse($request->start_date) : Carbon::now()->startOfMonth();
+        $startDate = $request->start_date ? Carbon::parse($request->start_date)->startOfDay() : Carbon::now()->startOfMonth();
         $endDate = $request->end_date ? Carbon::parse($request->end_date)->endOfDay() : Carbon::now()->endOfDay();
 
         $orders = Order::with('user')
@@ -133,8 +156,13 @@ class ReportController extends Controller
             ->latest()
             ->paginate(15);
 
+        // Ödəniş növləri üzrə statistika (Net satış - Qaytarma çıxılmış)
         $paymentStats = Order::whereBetween('created_at', [$startDate, $endDate])
-            ->select('payment_method', DB::raw('sum(grand_total) as total'), DB::raw('count(*) as count'))
+            ->select(
+                'payment_method',
+                DB::raw('sum(grand_total - refunded_amount) as total'),
+                DB::raw('count(*) as count')
+            )
             ->groupBy('payment_method')
             ->get();
 

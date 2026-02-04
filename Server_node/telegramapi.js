@@ -6,20 +6,21 @@ const fs = require('fs');
 const cors = require('cors');
 
 // --- AYARLAR ---
-const PORT = process.env.TG_API_PORT || 4000; // Bu API 4000-ci portda işləyəcək
+const PORT = process.env.TG_API_PORT || 4000;
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const API_KEY = process.env.CLIENT_API_KEY; 
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json({ limit: '50mb' }));
 
-// --- YADDAŞ SİSTEMİ (JSON) ---
+// --- YADDAŞ SİSTEMİ ---
 const DATA_FILE = 'telegram_bridge_data.json';
 let storage = {
-    partner_chats: {}, 
+    partner_chats: {}, // { partner_id: chat_id }
+    partners_data: {}, // { partner_id: { balance: 0, name: "" } } -> Balansı saxlamaq üçün
     pending_requests: [], 
-    processed_orders: [] 
+    processed_orders: [],
+    history: [] // Satış tarixçəsi: [{ partner_id, commission, date_str, timestamp }]
 };
 
 // Yaddaşı oxuyuruq
@@ -27,6 +28,9 @@ if (fs.existsSync(DATA_FILE)) {
     try {
         const raw = JSON.parse(fs.readFileSync(DATA_FILE));
         storage = { ...storage, ...raw };
+        // Struktur uyğunluğunu yoxlayırıq
+        if (!storage.history) storage.history = [];
+        if (!storage.partners_data) storage.partners_data = {};
     } catch (e) { console.error("Data oxuma xətası:", e); }
 }
 
@@ -40,23 +44,40 @@ let bot = null;
 if (TELEGRAM_TOKEN) {
     try {
         bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
-        console.log("🤖 Telegram Bot (Bridge) Aktivdir");
+        console.log("🤖 Telegram Bot (4000) Aktivdir");
+
+        // MENYULAR
+        const mainMenu = {
+            reply_markup: {
+                keyboard: [
+                    ['📊 Hesabatlar', '💰 Balansım'],
+                    ['ℹ️ İnfo']
+                ],
+                resize_keyboard: true
+            }
+        };
+
+        const reportMenu = {
+            reply_markup: {
+                keyboard: [
+                    ['📅 Günlük', '🗓 Aylıq'],
+                    ['tj İllik', 'Σ Ümumi'],
+                    ['🔙 Geri']
+                ],
+                resize_keyboard: true
+            }
+        };
 
         // 1. /start Komandası
         bot.onText(/\/start/, (msg) => {
             const chatId = msg.chat.id;
             const name = msg.from.first_name;
 
+            // Qeydiyyatlıdırmı?
             const isRegistered = Object.values(storage.partner_chats).includes(chatId.toString()) || Object.values(storage.partner_chats).includes(chatId);
 
             if (isRegistered) {
-                const opts = {
-                    reply_markup: {
-                        keyboard: [['📊 Hesabatlar', '💰 Balans']],
-                        resize_keyboard: true
-                    }
-                };
-                bot.sendMessage(chatId, `Salam, ${name}! ✅ Sizin hesabınız aktivdir.`, opts);
+                bot.sendMessage(chatId, `Salam, ${name}! ✅ Sistemə xoş gəldiniz.`, mainMenu);
             } else {
                 const opts = {
                     reply_markup: {
@@ -70,94 +91,155 @@ if (TELEGRAM_TOKEN) {
             }
         });
 
-        // 2. Düymə (Callback) Məntiqi
+        // 2. Callback (Təsdiq Düymələri)
         bot.on('callback_query', (query) => {
             const chatId = query.message.chat.id;
-            const msgId = query.message.message_id;
-            const data = query.data;
-
-            if (data === 'confirm_reg') {
+            if (query.data === 'confirm_reg') {
                 const exists = storage.pending_requests.find(u => u.chat_id == chatId);
                 const isLinked = Object.values(storage.partner_chats).includes(chatId.toString());
 
                 if (!exists && !isLinked) {
-                    const newRequest = {
+                    storage.pending_requests.push({
                         chat_id: chatId,
-                        name: query.from.first_name + (query.from.last_name ? ' ' + query.from.last_name : ''),
+                        name: query.from.first_name,
                         username: query.from.username || 'yoxdur',
                         date: new Date().toLocaleString()
-                    };
-                    storage.pending_requests.push(newRequest);
+                    });
                     save();
                 }
-
-                bot.editMessageText(`✅ Sorğunuz qəbul edildi!\n\n🆔 ID: \`${chatId}\`\n\nAdmin təsdiqini gözləyin.`, {
-                    chat_id: chatId, message_id: msgId, parse_mode: 'Markdown'
-                });
-
-            } else if (data === 'cancel_reg') {
-                bot.editMessageText("❌ İmtina edildi.", { chat_id: chatId, message_id: msgId });
+                bot.editMessageText(`✅ Sorğunuz qəbul edildi!\n🆔 ID: \`${chatId}\`\nAdmin təsdiqini gözləyin.`, { chat_id: chatId, message_id: query.message.message_id, parse_mode: 'Markdown' });
+            } else if (query.data === 'cancel_reg') {
+                bot.editMessageText("❌ Ləğv edildi.", { chat_id: chatId, message_id: query.message.message_id });
             }
         });
 
+        // 3. Menyu Məntiqi
         bot.on('message', (msg) => {
-            if (msg.text === '💰 Balans') {
-                bot.sendMessage(msg.chat.id, "💰 Balans məlumatı satış olduqda yenilənəcək.");
+            const chatId = msg.chat.id;
+            const text = msg.text;
+
+            // Partnyor ID-sini tapırıq
+            let partnerId = null;
+            for (const [pid, cid] of Object.entries(storage.partner_chats)) {
+                if (cid == chatId) { partnerId = pid; break; }
+            }
+
+            if (!partnerId && text !== '/start') {
+                if (text !== '/start') bot.sendMessage(chatId, "⚠️ Hesabınız hələ təsdiqlənməyib.");
+                return;
+            }
+
+            // --- BALANS ---
+            if (text === '💰 Balansım') {
+                const pData = storage.partners_data[partnerId] || { balance: 0 };
+                bot.sendMessage(chatId, `💰 **Cari Balansınız:**\n\nActive: *${pData.balance} ₼*\n\n_(Bu məbləğ ödənişlər çıxıldıqdan sonra qalan məbləğdir)_`, { parse_mode: 'Markdown' });
+            } 
+            
+            // --- HESABAT MENYUSU ---
+            else if (text === '📊 Hesabatlar') {
+                bot.sendMessage(chatId, "Zəhmət olmasa dövrü seçin:", reportMenu);
+            }
+            else if (text === '🔙 Geri') {
+                bot.sendMessage(chatId, "Əsas menyu:", mainMenu);
+            }
+            
+            // --- HESABATLARIN HESABLANMASI ---
+            else if (['📅 Günlük', '🗓 Aylıq', 'tj İllik', 'Σ Ümumi'].includes(text)) {
+                const now = new Date();
+                let filterFn = () => false;
+                let title = "";
+
+                if (text === '📅 Günlük') {
+                    title = "Bu Gün";
+                    const todayStr = now.toISOString().split('T')[0]; // YYYY-MM-DD
+                    filterFn = (item) => item.date_str.startsWith(todayStr);
+                } 
+                else if (text === '🗓 Aylıq') {
+                    title = "Bu Ay";
+                    const monthStr = now.toISOString().slice(0, 7); // YYYY-MM
+                    filterFn = (item) => item.date_str.startsWith(monthStr);
+                } 
+                else if (text === 'tj İllik') {
+                    title = "Bu İl";
+                    const yearStr = now.getFullYear().toString();
+                    filterFn = (item) => item.date_str.startsWith(yearStr);
+                } 
+                else if (text === 'Σ Ümumi') {
+                    title = "Bütün Dövr";
+                    filterFn = () => true;
+                }
+
+                // Hesablama
+                // Tarixçədən bu partnyora aid olanları süzürük
+                const myHistory = storage.history.filter(h => h.partner_id == partnerId);
+                const filtered = myHistory.filter(filterFn);
+                
+                const totalCommission = filtered.reduce((sum, item) => sum + parseFloat(item.commission), 0);
+                const count = filtered.length;
+
+                const reportMsg = `
+📊 **${title} üzrə Hesabat**
+
+✅ Satış Sayı: ${count}
+💰 **Qazanc:** ${totalCommission.toFixed(2)} ₼
+                `;
+                bot.sendMessage(chatId, reportMsg, { parse_mode: 'Markdown' });
+            }
+            
+            else if (text === 'ℹ️ İnfo') {
+                bot.sendMessage(chatId, "RJ POS Partner Sistemi v3.0\nSuallarınız üçün adminlə əlaqə saxlayın.");
             }
         });
 
-    } catch (e) { console.error("Bot başlatma xətası:", e); }
+    } catch (e) { console.error("Bot xətası:", e); }
 }
 
-// --- API ENDPOINTLƏR ---
+// --- API ---
 
-// [YENİ] Test üçün əsas səhifə (Brauzerdə açanda 404 verməsin)
-app.get('/', (req, res) => {
-    res.send('🚀 Telegram API Serveri İşləyir (Port 4000)');
-});
+app.get('/api/pending-partners', (req, res) => res.json(storage.pending_requests));
 
-// 1. [GET] Gözləyən istifadəçilər
-app.get('/api/pending-partners', (req, res) => {
-    res.json(storage.pending_requests);
-});
-
-// 2. [POST] Partnyor yaradıldı -> Bot mesajı
 app.post('/api/partner-welcome', (req, res) => {
     const { chat_id, name, promo_code, discount, commission } = req.body;
-    
     if (bot && chat_id) {
         storage.pending_requests = storage.pending_requests.filter(u => u.chat_id != chat_id);
         save();
-
-        const msg = `✅ **Təbrik edirik, ${name}!**\nHesabınız təsdiqləndi.\n\n🎫 Kod: \`${promo_code}\`\n📉 Endirim: ${discount}\n💰 Komissiya: ${commission}%`;
-        
-        bot.sendMessage(chat_id, msg, { parse_mode: 'Markdown' });
+        const msg = `✅ **Təbrik edirik, ${name}!**\n\n🎫 Kod: \`${promo_code}\`\n💰 Komissiya: ${commission}%\n📉 Müştəri Endirimi: ${discount}`;
+        bot.sendMessage(chat_id, msg, { parse_mode: 'Markdown', ...{ reply_markup: { keyboard: [['📊 Hesabatlar', '💰 Balansım'], ['ℹ️ İnfo']], resize_keyboard: true } } });
         res.json({ success: true });
     } else {
-        res.status(400).json({ success: false, message: "Bot aktiv deyil" });
+        res.status(400).json({ success: false });
     }
 });
 
-// 3. [POST] Sync Zamanı
+// [VACİB] SYNC - Məlumatların Saxlanması
 app.post('/api/telegram-sync', (req, res) => {
     try {
         const { type, payload } = req.body;
 
         if (type === 'telegram_sync' && payload) {
             
-            if (payload.partners && Array.isArray(payload.partners)) {
+            // A. Partnyor Məlumatlarını (Balans və ID) Yenilə
+            if (payload.partners) {
                 payload.partners.forEach(p => {
+                    // Chat ID xəritəsini yeniləyirik
                     if (p.telegram_chat_id) {
                         storage.partner_chats[p.id] = p.telegram_chat_id;
                     }
+                    // Balans və Ad məlumatını yeniləyirik (Balans sorğusu üçün)
+                    storage.partners_data[p.id] = {
+                        name: p.name,
+                        balance: p.balance
+                    };
                 });
                 
+                // Gözləyən siyahıdan təmizləmə
                 const activeChatIds = Object.values(storage.partner_chats);
                 storage.pending_requests = storage.pending_requests.filter(u => !activeChatIds.includes(u.chat_id.toString()));
                 
                 save();
             }
 
+            // B. Satış Bildirişi və TARİXÇƏYƏ YAZMA
             if (payload.latest_orders && bot) {
                 payload.latest_orders.forEach(order => {
                     if (order.promo_code && !storage.processed_orders.includes(order.receipt_code)) {
@@ -167,29 +249,49 @@ app.post('/api/telegram-sync', (req, res) => {
                         if (promo) {
                             const partnerId = promo.partner_id;
                             const chatId = storage.partner_chats[partnerId];
+                            const commission = order.calculated_commission || 0;
 
+                            // 1. Tarixçəyə Yazırıq (Hesabatlar üçün)
+                            // Tarixi ISO formatına salırıq (YYYY-MM-DD)
+                            const orderDate = new Date(); // Və ya order.created_at varsa onu parse edin
+                            const dateStr = orderDate.toISOString().split('T')[0];
+
+                            storage.history.push({
+                                partner_id: partnerId,
+                                commission: commission,
+                                grand_total: order.grand_total,
+                                receipt_code: order.receipt_code,
+                                date_str: dateStr, // "2024-02-04"
+                                timestamp: Date.now()
+                            });
+
+                            // 2. Bildiriş Göndəririk
                             if (chatId) {
-                                const msg = `🎉 **Yeni Satış!**\n\n🎫 Kod: \`${order.promo_code}\`\n💵 Satış: **${order.grand_total} ₼**\n⏰ Saat: ${order.time}`;
-                                bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' }).catch(e => console.error("Send error:", e.message));
+                                // Balansı da yenilənmiş halda göstərməyə çalışaq
+                                // (Sync-dən gələn balans əslində bu satışı daxil etmiş olmalıdır)
+                                const currentBalance = storage.partners_data[partnerId]?.balance || 0;
+
+                                const msg = `🎉 **Yeni Satış!**\n🎫 Kod: \`${order.promo_code}\`\n💵 Satış: ${order.grand_total} ₼\n💰 **Qazanc:** +${commission} ₼\n\n🏦 Cari Balans: ${currentBalance} ₼`;
+                                bot.sendMessage(chatId, msg, { parse_mode: 'Markdown' }).catch(e=>{});
+                                
                                 storage.processed_orders.push(order.receipt_code);
                             }
                         }
                     }
                 });
+                
+                // Tarixçəni çox şişirtməmək üçün (məs: son 10,000 satış)
+                if (storage.history.length > 10000) storage.history = storage.history.slice(-10000);
                 if (storage.processed_orders.length > 500) storage.processed_orders = storage.processed_orders.slice(-500);
+                
                 save();
             }
         }
-
         res.json({ success: true });
-
     } catch (e) {
         console.error(e);
-        res.status(500).json({ success: false, error: e.message });
+        res.status(500).json({ error: e.message });
     }
 });
 
-// Serveri başlat
-app.listen(PORT, () => {
-    console.log(`🚀 Telegram API Körpüsü aktivdir: Port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Telegram API: ${PORT}`));

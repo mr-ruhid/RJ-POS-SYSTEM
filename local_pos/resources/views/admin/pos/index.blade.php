@@ -2,226 +2,7 @@
 
 @section('content')
 <div class="h-[calc(100vh-120px)] flex flex-col md:flex-row gap-4"
-     x-data="{
-        searchQuery: '',
-        products: {{ Js::from($products) }}, // Controller-dən gələn hazır data
-        cart: [],
-        isLoading: false,
-        isProcessing: false,
-        showCheckoutModal: false,
-        promoCode: '',
-        promoDiscountAmount: 0,
-        promoMessage: '', // Mesajı göstərmək üçün (alert əvəzinə)
-
-        init() {
-            this.$nextTick(() => {
-                if(this.$refs.searchInput) this.$refs.searchInput.focus();
-            });
-        },
-
-        async searchProducts() {
-            if(this.searchQuery.length > 0 && this.searchQuery.length < 2) return;
-
-            this.isLoading = true;
-            try {
-                const response = await fetch(`{{ route('pos.search') }}?query=${this.searchQuery}`);
-                const data = await response.json();
-                // Axtarış nəticəsi gələndə products siyahısını yeniləyirik
-                // Əgər axtarış boşdursa, ilkin siyahını qaytarmaq olar (istəyə bağlı)
-                this.products = data;
-
-                if (this.products.length === 1 && this.products[0].barcode === this.searchQuery) {
-                    this.addToCart(this.products[0]);
-                    this.searchQuery = '';
-                    // Axtarışdan sonra siyahını təmizləmirik ki, kassir görsün, və ya təmizləyə bilərik
-                    this.products = [];
-                }
-            } catch (error) {
-                console.error('Axtarış xətası:', error);
-            } finally {
-                this.isLoading = false;
-            }
-        },
-
-        addToCart(product) {
-            if (product.stock <= 0) {
-                alert('Bu məhsul bitib!');
-                return;
-            }
-            const existingItem = this.cart.find(item => item.id === product.id && !item.is_gift);
-
-            if (existingItem) {
-                if (existingItem.qty < product.stock) {
-                    existingItem.qty++;
-                } else {
-                    alert('Maksimum stok sayına çatdınız!');
-                }
-            } else {
-                // Controller-dən gələn datada discount_amount və final_price mütləq olmalıdır
-                this.cart.push({
-                    ...product,
-                    qty: 1,
-                    is_gift: false,
-                    // Əgər nədənsə gəlməyibsə default dəyərlər
-                    price: Number(product.price),
-                    discount_amount: Number(product.discount_amount || 0),
-                    final_price: Number(product.final_price || product.price)
-                });
-            }
-            // Promokodu sıfırlamırıq, sadəcə yenidən hesablaya bilərik, amma təhlükəsizlik üçün sıfırlamaq yaxşıdır
-            this.promoDiscountAmount = 0;
-            this.promoMessage = '';
-        },
-
-        updateQty(index, amount) {
-            const item = this.cart[index];
-            const newQty = item.qty + amount;
-
-            if (newQty > item.stock) {
-                alert('Stokda kifayət qədər məhsul yoxdur.');
-                return;
-            }
-
-            if (newQty > 0) {
-                item.qty = newQty;
-            } else {
-                this.removeFromCart(index);
-            }
-            this.promoDiscountAmount = 0;
-            this.promoMessage = '';
-        },
-
-        removeFromCart(index) {
-            this.cart.splice(index, 1);
-            this.promoDiscountAmount = 0;
-            this.promoMessage = '';
-        },
-
-        toggleGift(index) {
-            this.cart[index].is_gift = !this.cart[index].is_gift;
-            this.promoDiscountAmount = 0;
-            this.promoMessage = '';
-        },
-
-        // Promokodu Yoxlamaq (Alertsiz)
-        async applyPromo() {
-            if(!this.promoCode) return;
-
-            let currentTotal = 0;
-            this.cart.forEach(item => {
-                if (!item.is_gift) {
-                    currentTotal += (Number(item.final_price) * item.qty);
-                }
-            });
-
-            if (currentTotal <= 0) {
-                this.promoMessage = 'Səbət boşdur!';
-                return;
-            }
-
-            try {
-                const response = await fetch(`{{ route('pos.check_promo') }}?code=${this.promoCode}&total=${currentTotal}`);
-                const data = await response.json();
-
-                if(data.valid) {
-                    this.promoDiscountAmount = Number(data.discount_amount);
-                    // Alert yoxdur, sadəcə inputun altında mesaj görünəcək (aşağıda HTML-də əlavə etdim)
-                    this.promoMessage = 'Endirim tətbiq edildi: -' + this.formatPrice(data.discount_amount);
-                } else {
-                    this.promoDiscountAmount = 0;
-                    this.promoMessage = data.message; // Xəta mesajı (məs: vaxtı bitib)
-                }
-            } catch(e) {
-                console.error(e);
-                this.promoDiscountAmount = 0;
-            }
-        },
-
-        get totals() {
-            let subtotal = 0;
-            let productDiscount = 0;
-            let grandTotal = 0;
-
-            this.cart.forEach(item => {
-                if (!item.is_gift) {
-                    // Məhsulun ilkin qiyməti (Endirimsiz)
-                    let itemOriginalTotal = Number(item.price) * item.qty;
-                    // Məhsulun endirimli qiyməti
-                    let itemFinalTotal = Number(item.final_price) * item.qty;
-                    // Məhsul üzrə endirim məbləği
-                    let itemDisc = itemOriginalTotal - itemFinalTotal;
-
-                    subtotal += itemOriginalTotal;
-                    productDiscount += itemDisc;
-                    grandTotal += itemFinalTotal;
-                }
-            });
-
-            // Promokod endirimi tətbiq olunur
-            let finalTotal = grandTotal - this.promoDiscountAmount;
-            if(finalTotal < 0) finalTotal = 0;
-
-            return {
-                subtotal,
-                // Cəmi endirim = Məhsul endirimləri + Promokod
-                discount: productDiscount + this.promoDiscountAmount,
-                grandTotal: finalTotal,
-                productDiscount: productDiscount // Sırf məhsul endirimi
-            };
-        },
-
-        openCheckout() {
-            if (this.cart.length === 0) return;
-            this.showCheckoutModal = true;
-        },
-
-        async processPayment(method) {
-            this.isProcessing = true;
-            try {
-                const response = await fetch(`{{ route('pos.store') }}`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRF-TOKEN': '{{ csrf_token() }}'
-                    },
-                    body: JSON.stringify({
-                        cart: this.cart,
-                        payment_method: method,
-                        paid_amount: this.totals.grandTotal,
-                        promo_code: this.promoDiscountAmount > 0 ? this.promoCode : null
-                    })
-                });
-
-                const result = await response.json();
-
-                if (result.success) {
-                    const printUrl = '/sales/' + result.order_id + '/print-official';
-                    window.open(printUrl, 'ReceiptPrint', 'width=400,height=600,toolbar=0,scrollbars=0,status=0');
-
-                    this.cart = [];
-                    this.promoCode = '';
-                    this.promoDiscountAmount = 0;
-                    this.promoMessage = '';
-                    this.showCheckoutModal = false;
-
-                    this.$nextTick(() => {
-                         if(this.$refs.searchInput) this.$refs.searchInput.focus();
-                    });
-                } else {
-                    alert('Xəta: ' + result.message);
-                }
-            } catch (error) {
-                alert('Sistem xətası baş verdi.');
-                console.error(error);
-            } finally {
-                this.isProcessing = false;
-            }
-        },
-
-        formatPrice(value) {
-            return Number(value).toFixed(2) + ' ₼';
-        }
-     }">
+     x-data="posSystem()">
 
     <!-- Kassa Başlığı -->
     <div class="flex justify-between items-center bg-white p-3 rounded-xl border border-gray-200 shadow-sm shrink-0">
@@ -267,7 +48,7 @@
                     <template x-for="product in products" :key="product.id">
                         <div @click="addToCart(product)" class="bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md cursor-pointer transition transform hover:-translate-y-1 overflow-hidden flex flex-col h-full relative">
                             <!-- Endirim Etiketi -->
-                            <template x-if="product.discount_amount > 0">
+                            <template x-if="product.discount_amount > 0 || (product.active_discount && product.active_discount.value > 0)">
                                 <div class="absolute top-2 right-2 bg-red-500 text-white text-xs font-bold px-2 py-1 rounded shadow z-10">
                                     Endirim
                                 </div>
@@ -280,10 +61,12 @@
                                 <template x-if="!product.image">
                                     <i class="fa-solid fa-box-open text-4xl text-gray-400"></i>
                                 </template>
-                                <div x-show="product.stock <= 0" class="absolute inset-0 bg-white/80 flex items-center justify-center">
+                                <!-- Stok yoxlanışı (Düzəliş edildi: store_stock, stock və quantity yoxlanılır) -->
+                                <div x-show="getProductStock(product) <= 0" class="absolute inset-0 bg-white/80 flex items-center justify-center">
                                     <span class="bg-red-100 text-red-800 text-xs font-bold px-2 py-1 rounded">Stok Yoxdur</span>
                                 </div>
                             </div>
+
                             <div class="p-3 flex-1 flex flex-col justify-between">
                                 <div>
                                     <h3 class="text-sm font-bold text-gray-800 line-clamp-2" x-text="product.name"></h3>
@@ -291,18 +74,19 @@
                                 </div>
                                 <div class="mt-2 flex justify-between items-end">
                                     <div>
-                                        <!-- Endirimli Qiymət Göstərilməsi -->
-                                        <template x-if="product.discount_amount > 0">
+                                        <!-- Qiymət Göstəricisi -->
+                                        <template x-if="getDiscountAmount(product) > 0">
                                             <div class="flex flex-col leading-none">
-                                                <span class="text-xs text-gray-400 line-through" x-text="formatPrice(product.price)"></span>
-                                                <span class="text-sm font-bold text-red-600" x-text="formatPrice(product.final_price)"></span>
+                                                <span class="text-xs text-gray-400 line-through" x-text="formatPrice(getProductPrice(product))"></span>
+                                                <span class="text-sm font-bold text-red-600" x-text="formatPrice(getFinalPrice(product))"></span>
                                             </div>
                                         </template>
-                                        <template x-if="!product.discount_amount || product.discount_amount <= 0">
-                                            <span class="text-sm font-bold text-blue-600" x-text="formatPrice(product.price)"></span>
+                                        <template x-if="getDiscountAmount(product) <= 0">
+                                            <span class="text-sm font-bold text-blue-600" x-text="formatPrice(getProductPrice(product))"></span>
                                         </template>
                                     </div>
-                                    <span class="text-xs font-medium bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded" x-text="product.stock + ' əd'"></span>
+                                    <!-- Stok Göstəricisi -->
+                                    <span class="text-xs font-medium bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded" x-text="getProductStock(product) + ' əd'"></span>
                                 </div>
                             </div>
                         </div>
@@ -324,7 +108,7 @@
             </div>
 
             <div class="flex-1 overflow-y-auto p-2 space-y-2">
-                <template x-for="(item, index) in cart" :key="item.id + (item.is_gift ? '_gift' : '')">
+                <template x-for="(item, index) in cart" :key="item.uuid">
                     <div class="bg-gray-50 p-3 rounded-lg border border-gray-200 flex flex-col gap-2 group hover:bg-white hover:shadow-sm transition"
                          :class="item.is_gift ? 'border-purple-300 bg-purple-50' : ''">
 
@@ -332,16 +116,15 @@
                             <div class="flex-1">
                                 <h4 class="text-sm font-bold text-gray-800" x-text="item.name"></h4>
                                 <div class="text-xs text-gray-500 mt-1 flex gap-2 items-center">
-                                    <!-- Endirim Göstəricisi Səbətdə -->
                                     <template x-if="!item.is_gift">
                                         <div>
+                                            <!-- Endirim varsa göstər -->
                                             <div x-show="item.discount_amount > 0" class="text-red-500 font-bold text-[10px]">
                                                 Endirim: -<span x-text="formatPrice(item.discount_amount * item.qty)"></span>
                                             </div>
                                             <span x-text="formatPrice(item.final_price) + ' x ' + item.qty"></span>
                                         </div>
                                     </template>
-
                                     <template x-if="item.is_gift">
                                         <span class="text-purple-600 font-bold uppercase text-[10px] border border-purple-200 px-1 rounded bg-white">HƏDİYYƏ</span>
                                     </template>
@@ -383,12 +166,11 @@
                 <!-- Promokod -->
                 <div class="mb-3">
                     <div class="flex gap-2">
-                        <input type="text" x-model="promoCode" placeholder="Promokod" class="flex-1 rounded-lg border-gray-300 text-sm focus:ring-blue-500 focus:border-blue-500">
+                        <input type="text" x-model="promoCode" placeholder="Promokod" class="flex-1 rounded-lg border-gray-300 text-sm focus:ring-blue-500 focus:border-blue-500 uppercase">
                         <button @click="applyPromo()" class="bg-gray-200 text-gray-700 px-3 py-1 rounded-lg text-sm hover:bg-gray-300 transition">
                             <i class="fa-solid fa-check"></i>
                         </button>
                     </div>
-                    <!-- Mesaj Yeri -->
                     <div x-show="promoMessage" class="text-xs mt-1" :class="promoDiscountAmount > 0 ? 'text-green-600' : 'text-red-500'" x-text="promoMessage"></div>
                 </div>
 
@@ -457,6 +239,279 @@
             </div>
         </div>
     </div>
-
 </div>
+
+<script>
+    document.addEventListener('alpine:init', () => {
+        Alpine.data('posSystem', () => ({
+            searchQuery: '',
+            products: {{ Js::from($products) }},
+            cart: [],
+            isLoading: false,
+            isProcessing: false,
+            showCheckoutModal: false,
+            promoCode: '',
+            promoDiscountAmount: 0,
+            promoMessage: '',
+
+            init() {
+                this.$nextTick(() => {
+                    if(this.$refs.searchInput) this.$refs.searchInput.focus();
+                });
+            },
+
+            // STOKU GÖTÜRƏN FUNKSİYA (Hər cür varianta baxır)
+            getProductStock(product) {
+                if (product.store_stock !== undefined) return parseInt(product.store_stock);
+                if (product.stock !== undefined) return parseInt(product.stock);
+                if (product.quantity !== undefined) return parseInt(product.quantity);
+                return 0;
+            },
+
+            // QİYMƏTİ GÖTÜRƏN FUNKSİYA
+            getProductPrice(product) {
+                let p = product.price !== undefined ? product.price : product.selling_price;
+                return Number(p || 0);
+            },
+
+            // ENDİRİMİ HESABLAYAN FUNKSİYA
+            getDiscountAmount(product) {
+                // Əgər controller hesablayıbsa
+                if (product.discount_amount !== undefined && product.discount_amount !== null) {
+                    return Number(product.discount_amount);
+                }
+
+                // JS ilə hesablamaq lazımdırsa
+                if (product.active_discount) {
+                    let price = this.getProductPrice(product);
+                    let d = product.active_discount;
+                    if (d.type === 'fixed') return Number(d.value);
+                    else return (price * Number(d.value) / 100);
+                }
+                return 0;
+            },
+
+            // FİNAL QİYMƏT
+            getFinalPrice(product) {
+                // Əgər controller hesablayıbsa
+                if (product.final_price !== undefined && product.final_price !== null) {
+                    return Number(product.final_price);
+                }
+                // JS ilə
+                let price = this.getProductPrice(product);
+                let discount = this.getDiscountAmount(product);
+                return Math.max(0, price - discount);
+            },
+
+            async searchProducts() {
+                if(this.searchQuery.length > 0 && this.searchQuery.length < 2) return;
+
+                this.isLoading = true;
+                try {
+                    const response = await fetch(`{{ route('pos.search') }}?query=${this.searchQuery}`);
+                    const data = await response.json();
+                    this.products = data;
+
+                    if (this.products.length === 1 && this.products[0].barcode === this.searchQuery) {
+                        this.addToCart(this.products[0]);
+                        this.searchQuery = '';
+                        this.products = [];
+                    }
+                } catch (error) {
+                    console.error('Axtarış xətası:', error);
+                } finally {
+                    this.isLoading = false;
+                }
+            },
+
+            addToCart(product) {
+                let stock = this.getProductStock(product);
+                if (stock <= 0) {
+                    alert('Bu məhsul bitib!');
+                    return;
+                }
+
+                const existingItem = this.cart.find(item => item.id === product.id && !item.is_gift);
+
+                // Məlumatları təmizləyib alırıq
+                let price = this.getProductPrice(product);
+                let discountAmount = this.getDiscountAmount(product);
+                let finalPrice = this.getFinalPrice(product);
+
+                if (existingItem) {
+                    if (existingItem.qty < stock) {
+                        existingItem.qty++;
+                    } else {
+                        alert('Maksimum stok sayına çatdınız!');
+                    }
+                } else {
+                    this.cart.push({
+                        ...product,
+                        id: product.id,
+                        uuid: Date.now() + Math.random(), // Unikal açar
+                        name: product.name,
+                        stock: stock,
+                        qty: 1,
+                        is_gift: false,
+                        price: price,
+                        discount_amount: discountAmount,
+                        final_price: finalPrice
+                    });
+                }
+                this.promoDiscountAmount = 0;
+                this.promoMessage = '';
+            },
+
+            updateQty(index, amount) {
+                const item = this.cart[index];
+                const newQty = item.qty + amount;
+
+                if (newQty > item.stock) {
+                    alert('Stokda kifayət qədər məhsul yoxdur.');
+                    return;
+                }
+
+                if (newQty > 0) {
+                    item.qty = newQty;
+                } else {
+                    this.removeFromCart(index);
+                }
+                this.promoDiscountAmount = 0;
+                this.promoMessage = '';
+            },
+
+            removeFromCart(index) {
+                this.cart.splice(index, 1);
+                this.promoDiscountAmount = 0;
+                this.promoMessage = '';
+            },
+
+            toggleGift(index) {
+                this.cart[index].is_gift = !this.cart[index].is_gift;
+                this.promoDiscountAmount = 0;
+                this.promoMessage = '';
+            },
+
+            async applyPromo() {
+                if(!this.promoCode) return;
+
+                let currentTotal = 0;
+                this.cart.forEach(item => {
+                    if (!item.is_gift) {
+                        currentTotal += (Number(item.final_price) * item.qty);
+                    }
+                });
+
+                if (currentTotal <= 0) {
+                    this.promoMessage = 'Səbət boşdur!';
+                    return;
+                }
+
+                try {
+                    const response = await fetch(`{{ route('pos.check_promo') }}?code=${this.promoCode}&total=${currentTotal}`);
+                    const data = await response.json();
+
+                    if(data.valid) {
+                        this.promoDiscountAmount = Number(data.discount_amount) || 0;
+                        this.promoMessage = 'Endirim tətbiq edildi: -' + this.formatPrice(data.discount_amount);
+                    } else {
+                        this.promoDiscountAmount = 0;
+                        this.promoMessage = data.message;
+                    }
+                } catch(e) {
+                    console.error(e);
+                    this.promoDiscountAmount = 0;
+                }
+            },
+
+            get totals() {
+                let subtotal = 0;
+                let productDiscount = 0;
+                let grandTotal = 0;
+
+                this.cart.forEach(item => {
+                    if (!item.is_gift) {
+                        let p = Number(item.price) || 0;
+                        let fp = Number(item.final_price) || 0;
+                        let da = Number(item.discount_amount) || 0;
+
+                        let itemOriginalTotal = p * item.qty;
+                        let itemFinalTotal = fp * item.qty;
+
+                        // Məhsul Endirimi = (Orijinal * Say) - (Final * Say)
+                        let itemDisc = itemOriginalTotal - itemFinalTotal;
+
+                        subtotal += itemOriginalTotal;
+                        productDiscount += itemDisc;
+                        grandTotal += itemFinalTotal;
+                    }
+                });
+
+                let finalTotal = grandTotal - this.promoDiscountAmount;
+                if(finalTotal < 0) finalTotal = 0;
+
+                return {
+                    subtotal,
+                    discount: productDiscount + this.promoDiscountAmount,
+                    grandTotal: finalTotal,
+                    productDiscount: productDiscount
+                };
+            },
+
+            openCheckout() {
+                if (this.cart.length === 0) return;
+                this.showCheckoutModal = true;
+            },
+
+            async processPayment(method) {
+                this.isProcessing = true;
+                try {
+                    const response = await fetch(`{{ route('pos.store') }}`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRF-TOKEN': '{{ csrf_token() }}'
+                        },
+                        body: JSON.stringify({
+                            cart: this.cart,
+                            payment_method: method,
+                            paid_amount: this.totals.grandTotal,
+                            promo_code: this.promoDiscountAmount > 0 ? this.promoCode : null
+                        })
+                    });
+
+                    const result = await response.json();
+
+                    if (result.success) {
+                        const printUrl = '/sales/' + result.order_id + '/print-official';
+                        window.open(printUrl, 'ReceiptPrint', 'width=400,height=600,toolbar=0,scrollbars=0,status=0');
+
+                        this.cart = [];
+                        this.promoCode = '';
+                        this.promoDiscountAmount = 0;
+                        this.promoMessage = '';
+                        this.showCheckoutModal = false;
+
+                        this.$nextTick(() => {
+                             if(this.$refs.searchInput) this.$refs.searchInput.focus();
+                        });
+                    } else {
+                        alert('Xəta: ' + result.message);
+                    }
+                } catch (error) {
+                    alert('Sistem xətası baş verdi.');
+                    console.error(error);
+                } finally {
+                    this.isProcessing = false;
+                }
+            },
+
+            formatPrice(value) {
+                let val = Number(value);
+                if (isNaN(val)) val = 0;
+                return val.toFixed(2) + ' ₼';
+            }
+        }));
+    });
+</script>
 @endsection

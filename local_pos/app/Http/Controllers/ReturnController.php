@@ -4,122 +4,147 @@ namespace App\Http\Controllers;
 
 use App\Models\Order;
 use App\Models\OrderItem;
+use App\Models\Product;
 use App\Models\ProductBatch;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
 class ReturnController extends Controller
 {
-    // Qaytarma Ekranı (Çek axtarışı üçün)
+    // 1. Axtarış Səhifəsi
     public function index()
     {
         return view('admin.returns.index');
     }
 
-    // Çeki Axtar və Gətir (Qaytarma üçün seçim ekranı)
+    // 2. Çek Axtarışı və Hesablama
     public function search(Request $request)
     {
-        $request->validate(['receipt_code' => 'required|string']);
+        $request->validate([
+            'receipt_code' => 'required|string'
+        ]);
 
-        $order = Order::with(['items', 'user'])
-                      ->where('receipt_code', $request->receipt_code)
-                      ->first();
+        $order = Order::with(['items', 'user'])->where('receipt_code', $request->receipt_code)->first();
 
         if (!$order) {
-            return back()->withErrors(['receipt_code' => 'Çek tapılmadı!']);
+            return back()->withErrors(['receipt_code' => 'Bu nömrəli çek tapılmadı!']);
+        }
+
+        // --- DÜZƏLİŞ: REAL QAYTARMA QİYMƏTİNİN HESABLANMASI ---
+
+        // 1. Səbətdəki məhsulların toplam dəyəri (Məhsul endirimləri çıxılmış halda)
+        // Qeyd: OrderItem 'total' sütunu məhsul endirimini artıq nəzərə alıb.
+        $basketTotal = $order->items->sum('total');
+
+        // 2. Ümumi Çekə tətbiq olunan əlavə endirim (Promokod və s.)
+        // Əgər BasketTotal > GrandTotal, deməli əlavə endirim (Promokod) var.
+        $globalDiscount = max(0, $basketTotal - $order->grand_total);
+
+        // 3. Hər məhsulun real ödənilən dəyərini hesablayırıq
+        foreach ($order->items as $item) {
+            // Məhsulun səbətdəki payı (Faizlə)
+            $share = ($basketTotal > 0) ? ($item->total / $basketTotal) : 0;
+
+            // Bu məhsula düşən promokod payı
+            $itemGlobalDiscountShare = $globalDiscount * $share;
+
+            // Real Ödənilən Məbləğ = (Məhsulun Yekun Qiyməti - Promokod Payı)
+            $realTotalPaid = $item->total - $itemGlobalDiscountShare;
+
+            // Vahid qiyməti (1 ədəd üçün)
+            $item->refundable_unit_price = ($item->quantity > 0) ? ($realTotalPaid / $item->quantity) : 0;
+
+            // Qaytarıla biləcək maksimum say
+            $item->max_returnable_qty = $item->quantity - $item->returned_quantity;
         }
 
         return view('admin.returns.create', compact('order'));
     }
 
-    // Qaytarmanı İcra Et (Process Refund)
+    // 3. Qaytarmanı Tamamla
     public function store(Request $request, Order $order)
     {
         $request->validate([
-            'items' => 'required|array', // Qaytarılacaq məhsullar: [item_id => quantity]
+            'items' => 'required|array',
+            'items.*.quantity' => 'required|integer|min:0',
         ]);
 
+        DB::beginTransaction();
         try {
-            DB::beginTransaction();
-
             $totalRefundAmount = 0;
-            $itemsReturnedCount = 0;
+            $itemsRefunded = false;
 
-            foreach ($request->items as $itemId => $qtyToReturn) {
-                // Say 0-dan böyükdürsə emal et
+            // Təkrar hesablama (Təhlükəsizlik üçün)
+            $basketTotal = $order->items->sum('total');
+            $globalDiscount = max(0, $basketTotal - $order->grand_total);
+
+            foreach ($request->items as $itemId => $data) {
+                $qtyToReturn = (int) $data['quantity'];
+
                 if ($qtyToReturn > 0) {
-                    $orderItem = OrderItem::findOrFail($itemId);
+                    $item = OrderItem::find($itemId);
 
-                    // Yoxlayırıq: Qaytarmaq istədiyi say, alınan saydan çox ola bilməz
-                    // Və ya əvvəl qaytarıbsa, qalan saydan çox ola bilməz
-                    $remainingQty = $orderItem->quantity - $orderItem->returned_quantity;
-
-                    if ($qtyToReturn > $remainingQty) {
-                        throw new \Exception("Xəta: {$orderItem->product_name} üçün maksimum {$remainingQty} ədəd qaytara bilərsiniz.");
+                    // Limit yoxlanışı
+                    $maxReturn = $item->quantity - $item->returned_quantity;
+                    if ($qtyToReturn > $maxReturn) {
+                        throw new \Exception("Xəta: {$item->product_name} məhsulundan maksimum $maxReturn ədəd qaytara bilərsiniz.");
                     }
 
-                    // 1. OrderItem-i yenilə (Qaytarılan sayı artır)
-                    $orderItem->increment('returned_quantity', $qtyToReturn);
+                    // Qiymət Hesabı
+                    $share = ($basketTotal > 0) ? ($item->total / $basketTotal) : 0;
+                    $itemGlobalDiscountShare = $globalDiscount * $share;
+                    $realTotalPaid = $item->total - $itemGlobalDiscountShare;
+                    $refundableUnitPrice = ($item->quantity > 0) ? ($realTotalPaid / $item->quantity) : 0;
 
-                    // 2. Pulu hesabla (Bir ədədin faktiki satış qiyməti)
-                    // Total / Quantity = Birinin qiyməti (Endirim və vergi daxil)
-                    $unitPrice = $orderItem->total / $orderItem->quantity;
-                    $refundAmount = $unitPrice * $qtyToReturn;
+                    $refundAmount = $refundableUnitPrice * $qtyToReturn;
+
+                    // Bazada yeniləmə
+                    $item->increment('returned_quantity', $qtyToReturn);
+
+                    // Stoku Bərpa Etmək (Mağazaya)
+                    // ProductBatch-i tapıb artırırıq ki, stok düzəlsin
+                    $this->restoreStock($item->product_id, $qtyToReturn);
+
                     $totalRefundAmount += $refundAmount;
-
-                    // 3. Stoku Geri Qaytar (Mağazaya)
-                    // Həmin məhsulun Mağaza (LOC:store) partiyasını tapırıq
-                    // Əgər eyni maya dəyəri ilə varsa üstünə gəlirik, yoxdursa yeni yaradırıq
-
-                    // Sadəlik üçün: Ən son mağaza partiyasına əlavə edirik və ya yeni "Return" partiyası yaradırıq
-                    $storeBatch = ProductBatch::where('product_id', $orderItem->product_id)
-                                    ->where('batch_code', 'like', '%LOC:store%')
-                                    ->latest()
-                                    ->first();
-
-                    if ($storeBatch) {
-                        $storeBatch->increment('current_quantity', $qtyToReturn);
-                    } else {
-                        // Əgər mağazada partiya yoxdursa (təmizlənibsə), yenisini yaradırıq
-                        ProductBatch::create([
-                            'product_id' => $orderItem->product_id,
-                            'cost_price' => $orderItem->cost, // Satışdakı maya dəyəri
-                            'initial_quantity' => $qtyToReturn,
-                            'current_quantity' => $qtyToReturn,
-                            'batch_code' => 'Return | LOC:store',
-                            'expiration_date' => null
-                        ]);
-                    }
-
-                    $itemsReturnedCount++;
+                    $itemsRefunded = true;
                 }
             }
 
-            if ($itemsReturnedCount == 0) {
-                return back()->with('error', 'Heç bir məhsul seçilməyib.');
+            if (!$itemsRefunded) {
+                return back()->with('error', 'Qaytarılacaq məhsul seçilməyib.');
             }
 
-            // 4. Satışın (Order) statusunu yenilə
+            // Order-də dəyişikliklər
             $order->increment('refunded_amount', $totalRefundAmount);
+            // $order->decrement('paid_amount', $totalRefundAmount); // İstəyə bağlı: Kassa balansını azaltmaq üçün
 
-            // Tam qaytarılıb yoxsa hissəvi?
-            $allReturned = $order->items->every(function ($item) {
-                return $item->quantity == $item->returned_quantity;
-            });
-
-            if ($allReturned) {
-                $order->update(['status' => 'refunded']);
-            } else {
-                $order->update(['status' => 'partial_refunded']); // Bu statusu bazada enum-a əlavə etmək lazımdır və ya string saxla
-            }
+            // Əgər hamısı qaytarılıbsa statusu dəyiş
+            // ... (Status məntiqi əlavə edilə bilər)
 
             DB::commit();
 
-            return redirect()->route('sales.index')->with('success', 'Qaytarma əməliyyatı uğurla tamamlandı! Məbləğ: ' . number_format($totalRefundAmount, 2) . ' ₼');
+            return redirect()->route('pos.index')->with('success', 'Qaytarma tamamlandı. Müştəriyə ödəniləcək məbləğ: ' . number_format($totalRefundAmount, 2) . ' ₼');
 
         } catch (\Exception $e) {
             DB::rollBack();
-            return back()->with('error', 'Xəta: ' . $e->getMessage());
+            return back()->with('error', $e->getMessage());
+        }
+    }
+
+    // Stoku bərpa edən köməkçi funksiya
+    private function restoreStock($productId, $qty)
+    {
+        // 1. Ümumi stoku artır
+        Product::where('id', $productId)->increment('quantity', $qty);
+
+        // 2. Partiya (Batch) stokunu artır (Ən son istifadə olunan partiyaya qaytarırıq)
+        $batch = ProductBatch::where('product_id', $productId)
+                    ->where('location', 'store')
+                    ->orderBy('created_at', 'desc')
+                    ->first();
+
+        if ($batch) {
+            $batch->increment('current_quantity', $qty);
         }
     }
 }
