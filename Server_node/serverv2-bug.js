@@ -36,7 +36,7 @@ app.use(session({
 let currentPayload = null;
 
 // ==========================================
-// 1. GİRİŞ SƏHİFƏSİ
+// 1. GİRİŞ SƏHİFƏSİ (GLASSMORPHISM DIZAYN)
 // ==========================================
 const loginHTML = `
 <!DOCTYPE html>
@@ -123,7 +123,7 @@ const loginHTML = `
 `;
 
 // ==========================================
-// 2. DASHBOARD SƏHİFƏSİ
+// 2. DASHBOARD SƏHİFƏSİ (FULL DİZAYN + FIX)
 // ==========================================
 const dashboardHTML = `
 <!DOCTYPE html>
@@ -558,10 +558,10 @@ const dashboardHTML = `
                 totalRefunds = p.latest_orders.reduce((sum, o) => sum + parseFloat(o.refunded_amount || 0), 0);
             }
 
-            // [DÜZƏLİŞ] Mənfəətdən komissiyanı ÇIXMAMAQ (Çünki PHP-dən gələn rəqəm artıq doğrudur)
-            // Sadəcə s.today_profit istifadə edirik.
-            const netProfit = parseFloat(s.today_profit || 0);
+            // Mənfəətdən komissiyanı çıxırıq
+            const netProfit = parseFloat(s.today_profit || 0) - totalCommission;
 
+            // Rəqəmlər
             setText('stat-sales', formatMoney(s.today_sales));
             
             const refEl = document.getElementById('stat-refunds');
@@ -585,11 +585,12 @@ const dashboardHTML = `
             setText('stat-stock-val', formatMoney(s.warehouse_cost));
             setText('stat-partners', s.partner_count || 0);
 
-            // 1. SATIŞLAR CƏDVƏLİ
+            // 1. SATIŞLAR (Qısa və Tam)
             if (p.latest_orders && Array.isArray(p.latest_orders)) {
-                const tbody = document.getElementById('table-orders-short');
-                tbody.innerHTML = p.latest_orders.slice(0, 10).map(o => renderOrderRow(o, 'short')).join('');
+                // Qısa cədvəl (Dashboard)
+                document.getElementById('table-orders-short').innerHTML = p.latest_orders.slice(0, 10).map(o => renderOrderRow(o, 'short')).join('');
                 
+                // Tam cədvəl (Sales Page)
                 document.getElementById('tbody-sales-full').innerHTML = p.latest_orders.map(o => renderOrderRow(o, 'full')).join('');
             }
 
@@ -652,44 +653,3 @@ const dashboardHTML = `
     </script>
 </body>
 </html>
-`;
-
-// ==========================================
-// 3. ROUTES
-// ==========================================
-app.get('/', (req, res) => {
-    if (req.session.authenticated) return res.send(dashboardHTML);
-    res.send(loginHTML);
-});
-
-app.post('/login', (req, res) => {
-    if (req.body.username === ADMIN_USER && req.body.password === ADMIN_PASS) {
-        req.session.authenticated = true;
-        res.redirect('./');
-    } else {
-        res.redirect('./?error=1');
-    }
-});
-
-app.get('/logout', (req, res) => { 
-    req.session.destroy(); 
-    res.redirect('./'); 
-});
-
-// [API] Yalnız Monitorinq Məlumatlarını Qəbul Edir
-app.post('/api/report', (req, res) => {
-    try {
-        const payload = req.body.payload;
-        currentPayload = payload;
-        io.emit('live_update', { type: 'full_report', payload: payload, time: new Date().toLocaleTimeString() });
-        res.json({ status: true });
-    } catch (e) {
-        res.status(500).json({ status: false, error: e.message });
-    }
-});
-
-io.on('connection', (socket) => {
-    if (currentPayload) socket.emit('live_update', { type: 'full_report', payload: currentPayload });
-});
-
-server.listen(3000, () => console.log('📺 Monitor Serveri: Port 3000'));
