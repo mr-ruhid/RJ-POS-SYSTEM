@@ -15,9 +15,11 @@ use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Carbon\Carbon;
+use App\Services\SyncService; // SyncService əlavə edildi
 
 class PosController extends Controller
 {
+    // 1. POS Ekranını açır
     public function index()
     {
         $products = Product::where('is_active', true)
@@ -27,6 +29,7 @@ class PosController extends Controller
             ->latest()
             ->get()
             ->map(function($product) {
+                // Stok cəmini hesablayırıq
                 $product->store_stock = $product->batches->sum('current_quantity');
                 return $product;
             });
@@ -34,11 +37,14 @@ class PosController extends Controller
         return view('admin.pos.index', compact('products'));
     }
 
+    // 2. Məhsul Axtarışı
     public function search(Request $request)
     {
         $query = $request->get('q') ?? $request->get('query');
 
-        if (!$query) return response()->json([]);
+        if (!$query) {
+            return response()->json([]);
+        }
 
         $products = Product::with(['category', 'activeDiscount', 'batches' => function($q) {
                 $q->where('location', 'store')->where('current_quantity', '>', 0);
@@ -55,8 +61,9 @@ class PosController extends Controller
             $stock = $product->batches->sum('current_quantity');
             $price = (float) $product->selling_price;
             $discountAmount = 0;
-            $taxRate = 0;
 
+            // Vergi dərəcəsi (Batch kodundan)
+            $taxRate = 0;
             $firstBatch = $product->batches->first();
             if ($firstBatch && $firstBatch->batch_code) {
                 if (preg_match('/\((\d+(?:\.\d+)?)%\)/', $firstBatch->batch_code, $matches)) {
@@ -64,6 +71,7 @@ class PosController extends Controller
                 }
             }
 
+            // Məhsul Endirimi
             if ($product->activeDiscount) {
                 $discount = $product->activeDiscount;
                 if ($discount->type == 'fixed') {
@@ -91,7 +99,7 @@ class PosController extends Controller
         return response()->json($results);
     }
 
-    // Promokod Yoxlanışı
+    // 3. Promokod Yoxlanışı (AJAX)
     public function checkPromo(Request $request)
     {
         $code = $request->get('code');
@@ -105,9 +113,10 @@ class PosController extends Controller
         if (!$promo->is_active) return response()->json(['valid' => false, 'message' => 'Bu promokod aktiv deyil']);
         if ($promo->expires_at && Carbon::parse($promo->expires_at)->isPast()) return response()->json(['valid' => false, 'message' => 'Promokodun vaxtı bitib']);
 
-        // [DÜZƏLİŞ] orders_count -> used_count
+        // [DÜZƏLİŞ] used_count sütunu istifadə olunur
         if ($promo->usage_limit && $promo->used_count >= $promo->usage_limit) return response()->json(['valid' => false, 'message' => 'Promokod limiti dolub']);
 
+        // Endirim hesablanması
         $discountAmount = 0;
         if ($promo->discount_type == 'percent') {
             $discountAmount = ($currentTotal * $promo->discount_value) / 100;
@@ -124,8 +133,9 @@ class PosController extends Controller
         ]);
     }
 
-    // Satışı Tamamla
-    public function store(Request $request)
+    // 4. Satışı Tamamla
+    // [VACİB] SyncService inject edilir
+    public function store(Request $request, SyncService $syncService)
     {
         $request->validate([
             'cart' => 'required|array|min:1',
@@ -145,10 +155,12 @@ class PosController extends Controller
 
             $userId = Auth::id() ?? 1;
 
+            // Lotereya Kodu
             $lotteryCode = method_exists(Order::class, 'generateUniqueLotteryCode')
                             ? Order::generateUniqueLotteryCode()
-                            : (string) rand(1000, 9999);
+                            : (string) rand(10000000, 99999999);
 
+            // İlkin Order yaradılır
             $order = Order::create([
                 'user_id' => $userId,
                 'receipt_code' => strtoupper(Str::random(8)),
@@ -163,7 +175,9 @@ class PosController extends Controller
                 'status' => 'completed'
             ]);
 
+            // Məhsulları emal edirik
             foreach ($request->cart as $item) {
+                // with('activeDiscount') vacibdir ki, endirim hesablansın
                 $product = Product::with('activeDiscount')->lockForUpdate()->findOrFail($item['id']);
 
                 $qtyNeeded = $item['qty'];
@@ -171,6 +185,8 @@ class PosController extends Controller
                 $isGift = filter_var($isGiftRaw, FILTER_VALIDATE_BOOLEAN);
 
                 $originalPrice = (float) $product->selling_price;
+
+                // Stokdan çıxılma (FIFO)
                 $deductionResult = $this->deductFromStoreStock($product, $qtyNeeded);
                 $productTotalCost = $deductionResult['total_cost'];
                 $calculatedTotalTax = $deductionResult['total_tax'];
@@ -180,21 +196,26 @@ class PosController extends Controller
                 $lineTotal = 0;
 
                 if ($isGift) {
+                    // Hədiyyə
                     $price = 0;
                     $lineTotal = 0;
                     $itemTaxAmount = $calculatedTotalTax;
                     $itemCostForReport = $productTotalCost + $calculatedTotalTax;
                 } else {
+                    // Normal Satış - Məhsul Endirimi
                     if ($product->activeDiscount) {
                         $d = $product->activeDiscount;
                         $discountAmount = ($d->type == 'fixed') ? $d->value : ($price * $d->value / 100);
                     }
+
                     $finalUnitTestPrice = max(0, $price - $discountAmount);
                     $lineTotal = $finalUnitTestPrice * $qtyNeeded;
+
                     $itemTaxAmount = $calculatedTotalTax;
                     $itemCostForReport = $productTotalCost;
                 }
 
+                // OrderItem yaradılır
                 OrderItem::create([
                     'order_id' => $order->id,
                     'product_id' => $product->id,
@@ -209,6 +230,7 @@ class PosController extends Controller
                     'total' => $lineTotal
                 ]);
 
+                // Ümumi dəyərləri toplayırıq
                 $subtotal += ($originalPrice * $qtyNeeded);
                 $totalProductDiscount += ($discountAmount * $qtyNeeded);
                 $totalTax += $itemTaxAmount;
@@ -216,42 +238,47 @@ class PosController extends Controller
                 $totalCost += $itemCostForReport;
             }
 
-            // PROMOKOD VƏ KOMİSSİYA
+            // --- PROMOKOD VƏ KOMİSSİYA ---
             $promoDiscount = 0;
             $promoId = null;
             $promoCodeStr = null;
             $totalCommission = 0;
 
             if ($request->promo_code) {
+                // Partner ilə birlikdə gətiririk
                 $promo = Promocode::where('code', $request->promo_code)->with('partner')->first();
 
                 if ($promo && $promo->is_active) {
                     $isValidDate = (!$promo->expires_at || $promo->expires_at > now());
-                    // [DÜZƏLİŞ] orders_count -> used_count
                     $isValidLimit = (!$promo->usage_limit || $promo->used_count < $promo->usage_limit);
 
                     if ($isValidDate && $isValidLimit) {
                         $promoId = $promo->id;
                         $promoCodeStr = $promo->code;
 
+                        // Endirim Hesabı
                         if ($promo->discount_type == 'percent') {
                             $promoDiscount = $grandTotal * ($promo->discount_value / 100);
                         } else {
                             $promoDiscount = $promo->discount_value;
                         }
+
                         $promoDiscount = min($promoDiscount, $grandTotal);
 
-                        // [DÜZƏLİŞ] İstifadə sayını artırırıq
+                        // İstifadə sayını artır
                         $promo->increment('used_count');
 
-                        // Komissiya Hesablanması
+                        // [HƏLL] KOMİSSİYA HESABLANMASI
                         if ($promo->partner) {
                             $partner = $promo->partner;
                             $commissionPercent = floatval($partner->commission_percent);
 
                             if ($commissionPercent > 0) {
+                                // Yekun məbləğdən (endirim çıxılmış) hesablayırıq
                                 $finalSaleAmount = max(0, $grandTotal - $promoDiscount);
                                 $totalCommission = ($finalSaleAmount * $commissionPercent) / 100;
+
+                                // Partnyorun balansını artırırıq
                                 $partner->increment('balance', $totalCommission);
                             }
                         }
@@ -263,19 +290,30 @@ class PosController extends Controller
             $totalDiscountAll = $totalProductDiscount + $promoDiscount;
             $finalGrandTotal = max(0, $grandTotal);
 
+            // Order-i yeniləyirik
             $order->update([
                 'subtotal' => $subtotal,
                 'total_discount' => $totalDiscountAll,
                 'total_tax' => $totalTax,
                 'grand_total' => $finalGrandTotal,
                 'total_cost' => $totalCost,
-                'total_commission' => $totalCommission,
+                'total_commission' => $totalCommission, // Komissiyanı yazırıq
                 'change_amount' => ($request->paid_amount ?? 0) - $finalGrandTotal,
                 'promo_code' => $promoCodeStr,
                 'promocode_id' => $promoId
             ]);
 
             DB::commit();
+
+            // [YENİ] TELEGRAM BİLDİRİŞİ
+            // Satış uğurlu oldusa, dərhal Telegram API-yə xəbər veririk
+            try {
+                if ($promoCodeStr) {
+                    $syncService->sendSaleNotification($order);
+                }
+            } catch (\Exception $e) {
+                Log::error("Telegram Notify Error: " . $e->getMessage());
+            }
 
             return response()->json([
                 'success' => true,
@@ -289,10 +327,14 @@ class PosController extends Controller
         } catch (\Exception $e) {
             DB::rollBack();
             Log::error('POS Error: ' . $e->getMessage());
-            return response()->json(['success' => false, 'message' => 'Xəta baş verdi: ' . $e->getMessage()], 500);
+            return response()->json([
+                'success' => false,
+                'message' => 'Xəta baş verdi: ' . $e->getMessage()
+            ], 500);
         }
     }
 
+    // Stokdan silmə funksiyası (FIFO)
     private function deductFromStoreStock($product, $qtyNeeded)
     {
         $batches = ProductBatch::where('product_id', $product->id)
