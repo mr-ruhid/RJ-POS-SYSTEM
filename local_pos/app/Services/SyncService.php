@@ -21,19 +21,19 @@ class SyncService
 
     public function __construct()
     {
-        // 1. Monitorinq Serveri (Node.js)
+        // 1. Monitorinq Serveri (Node.js - Dashboard üçün)
         $this->serverUrl = Setting::where('key', 'server_url')->value('value');
         if ($this->serverUrl) {
             $this->serverUrl = rtrim($this->serverUrl, '/');
         }
 
-        // 2. Telegram API Serveri (İkinci Ünvan)
+        // 2. Telegram API Serveri (Bot üçün)
         $this->telegramApiUrl = Setting::where('key', 'server_telegram_api')->value('value');
         if ($this->telegramApiUrl) {
             $this->telegramApiUrl = rtrim($this->telegramApiUrl, '/');
         }
 
-        // API Key (Əgər serverdə yoxlama varsa)
+        // API Key (Təhlükəsizlik üçün)
         $this->apiKey = Setting::where('key', 'client_api_key')->value('value');
     }
 
@@ -158,7 +158,7 @@ class SyncService
                 if ($response1->successful()) {
                     $messages[] = "Monitor OK";
                 } else {
-                    $status = false; // Birində xəta olsa ümumi statusu xəta göstəririk
+                    $status = false;
                     $messages[] = "Monitor Xətası: " . $response1->status();
                 }
             } catch (\Exception $e) {
@@ -171,17 +171,16 @@ class SyncService
         if ($this->telegramApiUrl) {
             try {
                 // Telegram API-yə eyni paketi göndəririk
-                // Məsələn: https://api.server.com/telegram-sync
                 $response2 = Http::timeout(10)->post($this->telegramApiUrl, [
                     'type' => 'telegram_sync',
-                    'api_key' => $this->apiKey, // Təhlükəsizlik üçün açar
+                    'api_key' => $this->apiKey,
                     'payload' => $payload
                 ]);
 
                 if ($response2->successful()) {
                     $messages[] = "Telegram API OK";
                 } else {
-                    // Telegram API xətası əsas işi dayandırmamalıdır, sadəcə log yazırıq
+                    // Telegram xətası əsas işi dayandırmamalıdır
                     $messages[] = "Telegram API Xətası: " . $response2->status();
                 }
             } catch (\Exception $e) {
@@ -194,6 +193,32 @@ class SyncService
             'status' => $status,
             'message' => implode(' | ', $messages)
         ];
+    }
+
+    /**
+     * [YENİLƏNİB] Partnyor yaradılanda YALNIZ TELEGRAM API-yə mesaj göndərir
+     */
+    public function sendPartnerWelcome($partner, $promoCode, $discountValue, $commission)
+    {
+        // serverUrl (Monitor) yox, telegramApiUrl lazımdır
+        if (!$this->telegramApiUrl || !$partner->telegram_chat_id) return;
+
+        try {
+            // URL düzəltmə: .../telegram-sync -> .../partner-welcome
+            // Əgər istifadəçi Tənzimləmələrdə .../api/telegram-sync yazıbsa, onu dəyişirik
+            $url = str_replace('/telegram-sync', '/partner-welcome', $this->telegramApiUrl);
+
+            Http::timeout(5)->post($url, [
+                'api_key' => $this->apiKey,
+                'chat_id' => $partner->telegram_chat_id,
+                'name' => $partner->name,
+                'promo_code' => $promoCode,
+                'discount' => $discountValue,
+                'commission' => $commission
+            ]);
+        } catch (\Exception $e) {
+            Log::error("Partner Welcome Error: " . $e->getMessage());
+        }
     }
 
     /**

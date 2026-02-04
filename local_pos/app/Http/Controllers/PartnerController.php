@@ -9,6 +9,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use App\Services\SyncService;
 
 class PartnerController extends Controller
 {
@@ -24,37 +25,38 @@ class PartnerController extends Controller
     }
 
     /**
-     * [AJAX] Serverdən (Node.js) Gözləyən Telegram İstəklərini Çəkmək
+     * 1. Serverdən (TELEGRAM API-dən) Gözləyən İstəkləri Çəkmək (AJAX)
+     * DÜZƏLİŞ: Artıq Monitorinq serverindən yox, Telegram API-dən soruşur.
      */
     public function fetchTelegramRequests()
     {
-        // 1. Server URL-ni götürürük (Tənzimləmələrdən)
-        $serverUrl = Setting::where('key', 'server_url')->value('value');
-        $apiKey = Setting::where('key', 'client_api_key')->value('value'); // Əgər serverdə yoxlama varsa
+        // [DÜZƏLİŞ] 'server_url' yox, 'server_telegram_api' götürürük
+        $telegramApiUrl = Setting::where('key', 'server_telegram_api')->value('value');
+        $apiKey = Setting::where('key', 'client_api_key')->value('value');
 
-        if (!$serverUrl) {
-            return response()->json(['error' => 'Server URL təyin edilməyib (Tənzimləmələrə baxın).'], 400);
+        if (!$telegramApiUrl) {
+            return response()->json(['error' => 'Telegram API linki təyin edilməyib (Tənzimləmələrə baxın).'], 400);
         }
 
         try {
-            // URL-i düzəldirik (Sondakı slash-ı silirik)
-            $url = rtrim($serverUrl, '/');
+            // Tənzimləmələrdə link adətən belə olur: ".../api/telegram-sync"
+            // Bizə isə lazımdır: ".../api/pending-partners"
+            // Ona görə sonluğu dəyişirik
+            $url = str_replace('/telegram-sync', '/pending-partners', $telegramApiUrl);
 
-            // Node.js API-ə sorğu göndəririk
-            // Əgər Nginx-də /monitor/ istifadə edirsinizsə, URL belə ola bilər: https://domain.com/monitor/api/pending-partners
-            // Node.js kodu /api/pending-partners dinləyir.
+            // Əgər user tənzimləmədə sadəcə domen yazıbsa, ehtiyat variant:
+            if (!str_contains($url, '/api/pending-partners')) {
+                 $url = rtrim($telegramApiUrl, '/') . '/api/pending-partners';
+            }
 
-            // Sadəlik üçün birbaşa yapışdırırıq (Server URL-də /monitor varsa işləyəcək)
-            $fullUrl = $url . '/api/pending-partners';
-
-            $response = Http::timeout(5)->get($fullUrl, [
+            $response = Http::timeout(5)->get($url, [
                 'api_key' => $apiKey
             ]);
 
             if ($response->successful()) {
                 return response()->json($response->json());
             } else {
-                return response()->json(['error' => 'Serverdən xətalı cavab gəldi: ' . $response->status()], 500);
+                return response()->json(['error' => 'Telegram API cavab vermədi: ' . $response->status()], 500);
             }
         } catch (\Exception $e) {
             return response()->json(['error' => 'Bağlantı xətası: ' . $e->getMessage()], 500);
@@ -62,29 +64,24 @@ class PartnerController extends Controller
     }
 
     /**
-     * [POST] Telegram İstəyini Təsdiqləyib Partnyor + Promokod Yaratmaq
+     * 2. Telegram İstəyini Təsdiqləyib Partnyor + Promokod Yaratmaq
      */
-    public function createFromTelegram(Request $request)
+    public function createFromTelegram(Request $request, SyncService $syncService)
     {
-        // 1. Validasiya
         $request->validate([
             'telegram_chat_id' => 'required|string|unique:partners,telegram_chat_id',
             'name' => 'required|string|max:255',
             'phone' => 'nullable|string|max:50',
-
-            // Promokod Məlumatları
             'promo_code' => 'required|string|unique:promocodes,code',
             'discount_value' => 'required|numeric|min:0',
             'discount_type' => 'required|in:percent,fixed',
-
-            // Partnyor Qazancı
             'commission_percent' => 'required|numeric|min:0|max:100',
         ]);
 
         DB::beginTransaction();
 
         try {
-            // A. Partnyoru Yaradırıq
+            // A. Partnyor Yaradılır
             $partner = Partner::create([
                 'name' => $request->name,
                 'phone' => $request->phone,
@@ -94,30 +91,35 @@ class PartnerController extends Controller
                 'is_active' => true
             ]);
 
-            // B. Promokodu Yaradırıq
+            // B. Promokod Yaradılır
             Promocode::create([
                 'code' => strtoupper($request->promo_code),
                 'discount_type' => $request->discount_type,
                 'discount_value' => $request->discount_value,
                 'partner_id' => $partner->id,
                 'is_active' => true,
-                'usage_limit' => null,
                 'orders_count' => 0
             ]);
 
-            // C. Növbəti sinxronizasiyada bu məlumatlar serverə gedəcək və server biləcək ki, bu ID artıq partnyordur.
-
             DB::commit();
-            return back()->with('success', 'Partnyor və Promokod uğurla yaradıldı!');
+
+            // C. Telegram API-yə Xoşgəldin Mesajı Göndərmək
+            // Bunu SyncService vasitəsilə edirik, amma SyncService-də də düzəliş lazımdır
+            $syncService->sendPartnerWelcome(
+                $partner,
+                $request->promo_code,
+                $request->discount_value . ($request->discount_type == 'percent' ? '%' : ' AZN'),
+                $request->commission_percent
+            );
+
+            return back()->with('success', 'Partnyor uğurla yaradıldı və Telegrama bildiriş göndərildi!');
 
         } catch (\Exception $e) {
             DB::rollBack();
-            Log::error('Partner Create Error: ' . $e->getMessage());
-            return back()->with('error', 'Xəta baş verdi: ' . $e->getMessage());
+            return back()->with('error', 'Xəta: ' . $e->getMessage());
         }
     }
 
-    // Digər Metodlar (Ödəniş, Silmə, Update)
     public function updateConfig(Request $request, Partner $partner)
     {
         $request->validate([
@@ -154,5 +156,14 @@ class PartnerController extends Controller
     {
         $partner->delete();
         return back()->with('success', 'Silindi.');
+    }
+
+    public function getStats(Partner $partner)
+    {
+        return response()->json([
+            'balance' => $partner->balance,
+            'commission_percent' => $partner->commission_percent,
+            'promocodes' => $partner->promocodes
+        ]);
     }
 }

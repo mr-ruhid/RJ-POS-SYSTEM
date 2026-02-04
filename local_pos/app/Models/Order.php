@@ -4,10 +4,15 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Concerns\HasUuids; // 1. Bu sətri əlavə edin
 
 class Order extends Model
 {
-    use HasFactory;
+    use HasFactory, HasUuids; // 2. Trait-i bura əlavə edin
+
+    // UUID istifadə etdiyimiz üçün bunları qeyd edirik
+    public $incrementing = false;
+    protected $keyType = 'string';
 
     protected $guarded = [];
 
