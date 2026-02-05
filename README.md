@@ -7,13 +7,13 @@ Laravel və Node.js üzərində qurulmuş, Hibrid (Online/Offline) rejimdə işl
 </p>
 
 <p>
-<a href="https://laravel.com"><img src="https://www.google.com/search?q=https://img.shields.io/badge/Laravel-FF2D20%3Fstyle%3Dfor-the-badge%26logo%3Dlaravel%26logoColor%3Dwhite" alt="Laravel"></a>
-<a href="https://nodejs.org"><img src="https://www.google.com/search?q=https://img.shields.io/badge/Node.js-339933%3Fstyle%3Dfor-the-badge%26logo%3Dnodedotjs%26logoColor%3Dwhite" alt="Node.js"></a>
-<a href="https://socket.io"><img src="https://www.google.com/search?q=https://img.shields.io/badge/Socket.io-010101%3Fstyle%3Dfor-the-badge%26logo%3Dsocketdotio%26logoColor%3Dwhite" alt="Socket.io"></a>
-<a href="https://tailwindcss.com"><img src="https://www.google.com/search?q=https://img.shields.io/badge/Tailwind_CSS-38B2AC%3Fstyle%3Dfor-the-badge%26logo%3Dtailwind-css%26logoColor%3Dwhite" alt="Tailwind CSS"></a>
+<a href="https://laravel.com"><img src="https://img.shields.io/badge/Laravel-FF2D20%3Fstyle%3Dfor-the-badge%26logo%3Dlaravel%26logoColor%3Dwhite" alt="Laravel"></a>
+<a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-339933%3Fstyle%3Dfor-the-badge%26logo%3Dnodedotjs%26logoColor%3Dwhite" alt="Node.js"></a>
+<a href="https://socket.io"><img src="https://img.shields.io/badge/Socket.io-010101%3Fstyle%3Dfor-the-badge%26logo%3Dsocketdotio%26logoColor%3Dwhite" alt="Socket.io"></a>
+<a href="https://tailwindcss.com"><img src="https://img.shields.io/badge/Tailwind_CSS-38B2AC%3Fstyle%3Dfor-the-badge%26logo%3Dtailwind-css%26logoColor%3Dwhite" alt="Tailwind CSS"></a>
 </p>
 
-<a href="https://www.google.com/search?q=https://pos.ruhidjavadov.site"><strong>🌐 Yeniliklər və Pluginlər (Rəsmi Sayt)</strong></a>
+<a href="https://pos.ruhidjavadov.site"><strong>🌐 Yeniliklər və Pluginlər (Rəsmi Sayt)</strong></a>
 
 </div>
 
@@ -66,7 +66,7 @@ Satış zamanı avtomatik 5 rəqəmli unikal lotereya kodu verilməsi.
 <div align="center">
 
 <a href="https://kofe.al/@ruhidjavadoff">
-<img src="https://www.google.com/search?q=https://kofe.al/assets/img/kofeal-badge.png" height="50" alt="Kofe.al ilə dəstək ol">
+<img src="https://kofe.al/assets/img/kofeal-badge.png" height="50" alt="Kofe.al ilə dəstək ol">
 </a>
 
 
@@ -74,7 +74,7 @@ Satış zamanı avtomatik 5 rəqəmli unikal lotereya kodu verilməsi.
 
 
 <a href="mailto:ruhidjavadoff@gmail.com">
-<img src="https://www.google.com/search?q=https://img.shields.io/badge/PayPal-00457C%3Fstyle%3Dfor-the-badge%26logo%3Dpaypal%26logoColor%3Dwhite" alt="PayPal">
+<img src=https://img.shields.io/badge/PayPal-00457C%3Fstyle%3Dfor-the-badge%26logo%3Dpaypal%26logoColor%3Dwhite" alt="PayPal">
 </a>
 
 
@@ -113,12 +113,12 @@ Layihə ilə bağlı suallarınız və ya təklifləriniz üçün əlaqə saxlay
 
 <div align="center">
 
-<a href="https://www.google.com/search?q=https://wa.me/994506636031">
-<img src="https://www.google.com/search?q=https://img.shields.io/badge/WhatsApp-25D366%3Fstyle%3Dfor-the-badge%26logo%3Dwhatsapp%26logoColor%3Dwhite" alt="WhatsApp">
+<a href="https://wa.me/994506636031">
+<img src="https://img.shields.io/badge/WhatsApp-25D366%3Fstyle%3Dfor-the-badge%26logo%3Dwhatsapp%26logoColor%3Dwhite" alt="WhatsApp">
 </a>
 
 <a href="mailto:ruhidjavadoff@gmail.com">
-<img src="https://www.google.com/search?q=https://img.shields.io/badge/Email-D14836%3Fstyle%3Dfor-the-badge%26logo%3Dgmail%26logoColor%3Dwhite" alt="Email">
+<img src="https://img.shields.io/badge/Email-D14836%3Fstyle%3Dfor-the-badge%26logo%3Dgmail%26logoColor%3Dwhite" alt="Email">
 </a>
 
 </div>
